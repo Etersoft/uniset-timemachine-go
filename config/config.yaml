@@ -1,0 +1,22 @@
+database:
+  type: clickhouse
+  dsn: clickhouse://default:@localhost:9000/uniset
+  table: uniset.main_history
+  step: 150ms
+  window: 2s
+  speed: 400
+
+sensors:
+  config: config/test.xml
+  selector: "Sensor?????_S"
+  from: 2024-06-01T00:00:00Z
+  to: 2024-06-01T00:01:00Z
+  points: 300
+  random: 50
+
+output:
+  mode: http
+  sm_url: http://localhost:9191/api/v01/SharedMemory
+  sm_supplier: TestProc
+  batch_size: 500
+  verbose: true

@@ -1,0 +1,143 @@
+## Детали и договорённости
+
+- Разрабатываем только консольный вариант тайм-машины; GTK-интерфейс в этой ветке не обновляем.
+- Источники данных — БД с изменениями датчиков (PostgreSQL, SQLite и т.п.), где записаны только моменты перемен значений.
+- Во время проигрывания удерживаем для каждого датчика последнее известное значение (`last_value`) и timestamp, чтобы интерполировать шаги, на которых обновлений не было.
+- Данные для отображения публикуем в отдельный процесс SharedMemory через HTTP/WebSocket; конкретный протокол и формат сообщений уточним на финальном этапе.
+- Отправляем изменения батчами ограниченного размера; если дельта шага большая, делим её на несколько запросов с общим `step_id`.
+- Разрешено использовать несколько параллельных соединений/воркеров (HTTP или WebSocket), распределяя датчики по сегментам и отправляя их независимо.
+- Основной цикл проигрывания заранее буферизует окно изменений (например, 1–5 минут вперёд), чтобы успевать подготавливать значения даже при больших периодах и количестве датчиков (до ~100k).
+
+## Архитектура воспроизведения (рабочая версия)
+
+1. **Загрузчик истории (`internal/storage`)**
+   - На вход получает список `sensor_id`, границы периода (`t_start`, `t_end`) и размер окна `window`.
+   - PostgreSQL-версия (`internal/storage/postgres`) использует `pgx`/`pgxpool`: для каждой порции окна выполняет
+     ```sql
+     SELECT sensor_id, timestamp, COALESCE(time_usec,0) AS usec, value
+     FROM main_history
+     WHERE sensor_id = ANY($1)
+       AND (timestamp + make_interval(microseconds => COALESCE(time_usec,0))) BETWEEN $2 AND $3
+     ORDER BY timestamp, usec, sensor_id;
+     ```
+     Возвращённые строки преобразуются в `storage.SensorEvent` с точным `time.Time`.
+   - Вариант для SQLite (`internal/storage/sqlite`) использует `database/sql` + `modernc.org/sqlite`, перед выполнением запросов записывает ID датчиков во временную таблицу `tm_sensors` (чтобы не упираться в лимиты `IN`). Warmup реализован через оконную функцию `ROW_NUMBER() OVER (PARTITION BY sensor_id ORDER BY timestamp DESC, usec DESC)` с фильтром по Unix microseconds.
+   - Возвращает результат через канал `chan []SensorEvent`, где каждый элемент отсортирован по timestamp внутри пачки.
+   - Поддерживает два режима: начальная выборка «последнего известного значения» (поиск записи перед `t_start`) и потоковая подгрузка окон вперёд.
+   - Warmup-запрос в Postgres использует `DISTINCT ON (sensor_id)` чтобы быстро получить последнее значение перед стартом периода; также реализован метод Range (MIN/MAX timestamp) для CLI-опции `--show-range`. В SQLite аналогичный запрос делается через `MIN/MAX`.
+
+2. **Хранилище состояний (`internal/replay/state`)**
+   - Держит массив/слайс `[]SensorState` с последним timestamp и значением; индекс соответствует плотному идентификатору датчика.
+   - При поступлении `SensorEvent` обновляет соответствующий `SensorState` и кладёт событие в очередь «будущих» изменений (min-heap по `ts`), чтобы знать, когда сменится значение.
+   - Предоставляет метод `Snapshot(step_ts)` — возвращает набор изменившихся датчиков (новые значения относительно предыдущего шага) и обновляет «последнее отправленное значение».
+
+3. **Планировщик шагов (`internal/replay/runner`)**
+   - Поддерживает clock (`time.Ticker` или симулированный темп) и канал команд (`pause`, `resume`, `seek`).
+   - На каждом шаге:
+     1. Убеждается, что окно данных покрывает `step_ts`; при необходимости дожидается подгрузки от storage.
+     2. Вызывает `Snapshot`, получает дельту, разбивает её на пачки и распределяет между очередями отправителей.
+     3. Обновляет статистику (отставание, количество датчиков, задержки).
+   - Для перемотки пересоздаёт `SensorState`, заново запрашивает события начиная с новой точки.
+
+4. **Клиент SharedMemory (`internal/sharedmem`)**
+   - Экспортирует интерфейс `type Client interface { Send(step StepPayload) error }`.
+   - Конкретные реализации: `httpClient`, `wsClient`, `stdoutClient` (для тестов).
+   - `StepPayload` включает `StepID`, `StepTs`, `BatchID`, `BatchTotal` и список `SensorUpdate {ID, Value}`; `BatchID` позволяет делить один шаг на несколько пакетов при большом числе датчиков.
+   - Менеджер отправителей создаёт N воркеров, каждый с собственной очередью `chan StepPayload` и соединением.
+
+5. **CLI (`cmd/timemachine`)**
+   - Парсит параметры (`--db`, `--confile`, `--sensors`, `--from`, `--to`, `--step`, `--window`, `--speed`, `--output`, `--show-range`).
+   - Настраивает компоненты и запускает `runner`.
+
+## Формат БД (по прототипу)
+
+- `main_sensor` — справочник датчиков.
+  - `id` (PK, int/autoincrement)
+  - `name` (строковый идентификатор)
+  - `textname` (описание)
+- `main_history` — история изменений.
+  - `id` (PK, autoincrement)
+  - `timestamp` (`TIMESTAMP`) — секунды.
+  - `time_usec` (`INTEGER`) — микросекунды (если нужно объединять с `timestamp` → `timestamp + usec/1e6`).
+  - `sensor_id` (`INTEGER`, FK на `main_sensor.id`)
+  - `value` (`FLOAT`)
+  - `node_id` (`INTEGER`, FK на `main_sensor.id`, хранит узел/контекст)
+  - `confirm` (`INTEGER`, nullable) — время подтверждения в секундах (может быть опциональным для консольной версии).
+
+В Go-наборах достаточно полей `sensor_id`, `timestamp`+`time_usec`, `value`, `node_id`.
+
+### Требования к чтению истории
+
+- **Warmup**: для каждого датчика нужен последний `main_history` перед `t_start`. Запрос:  
+  `SELECT DISTINCT ON (sensor_id) sensor_id, timestamp, time_usec, value FROM main_history WHERE sensor_id IN (...) AND (timestamp, time_usec) <= (:from_ts, :from_usec) ORDER BY sensor_id, timestamp DESC, time_usec DESC;`
+- **Окна**: основной запрос, который стримит изменения пакетами по `timestamp`.  
+  `SELECT sensor_id, timestamp, time_usec, value FROM main_history WHERE sensor_id IN (...) AND (timestamp, time_usec) >= (:window_start) AND (timestamp, time_usec) < (:window_end) ORDER BY timestamp, time_usec, sensor_id LIMIT :batch`.
+- **Индексы**: нужен составной индекс `(sensor_id, timestamp, time_usec)` и, по возможности, BRIN по `timestamp` для больших объёмов.
+- **Кондиции**: чётко задаём `LIMIT` и `ORDER BY` с пагинацией по `(timestamp, time_usec, id)` чтобы не терять записи при длинных периодах.
+
+Go-структуры:
+
+```go
+type Sensor struct {
+	ID       int64
+	Name     string
+	TextName string
+}
+
+type HistoryRow struct {
+	SensorID int64
+	Ts       time.Time // комбинируем timestamp + usec
+	Value    float64
+	NodeID   int64
+}
+## Конфигурация и список датчиков
+
+- Файл конфигурации (UniSet XML или JSON) хранит:
+  - параметры подключения к БД (опционально),
+  - словарь `sensors` (`name -> id`),
+  - необязательные наборы (`sets`: имя → массив имён датчиков).
+- Для UniSet XML используем секцию `<sensors><item id="..." name="..." textname="..."/></sensors>`; поля `textname`, `iotype` сохраняем в `SensorMeta`.
+- CLI-параметр `--slist` принимает:
+  - `ALL` — взять все `id` из `sensors`,
+  - имя набора — раскрыть через `sets`,
+  - список через запятую (например, `sensor1,sensor5`).
+- `pkg/config` должен предоставить:
+
+```go
+type Config struct {
+	Sensors map[string]int64
+	Sets    map[string][]string
+}
+
+func (c *Config) Resolve(set string) ([]int64, error)
+```
+
+- CLI при старте загружает конфиг, вызывает `Resolve`, затем передаёт ID в `storage`/`replay`.
+- Флаг `--batch-size` задаёт максимальное количество обновлений в одном пакете отправки (по умолчанию 1024); `replay.Service` при необходимости делит один шаг на несколько `StepPayload`.
+- Флаг `--show-range` обращается к `Storage.Range` и печатает доступный интервал без запуска проигрывания.
+```
+
+## Ближайшие технические задачи
+
+1. **Инициализация Go-проекта**
+   - `go mod init`, базовый `main.go` с заглушкой CLI и выводом help.
+   - Создать базовые пакеты (`internal/storage`, `internal/replay`, `internal/sharedmem`, `pkg/config`) и каркасы интерфейсов.
+
+2. **Конфигурация и входные параметры**
+   - Реализовать чтение списка датчиков и соединения с БД (пока можно из YAML/JSON для простоты).
+   - Настроить CLI-флаги и валидацию периода/шага.
+
+3. **Минимальный сторидж**
+   - Интерфейс `Storage` + in-memory/mock реализация, работающая на заранее подготовленных данных (для тестов).
+   - Подготовить контракты под Postgres/SQLite, но отложить реализацию до стабилизации API.
+
+4. **Цикл воспроизведения (MVP)**
+   - Реализовать `SensorState` и шаговый планировщик, который читает события из mock storage и пишет дельты в `stdoutClient`.
+   - Покрыть unit-тестами интерполяцию и обработку окон.
+
+5. **SharedMemory-клиент (MVP)**
+   - Добавить интерфейс + реализацию `stdoutClient`, чтобы увидеть формат батчей.
+   - Спроектировать структуру `StepPayload`, `SensorUpdate`.
+
+6. **Расширения**
+   - Поддержка реального подключения к БД, параллельная отправка батчей, обработка ошибок сети.

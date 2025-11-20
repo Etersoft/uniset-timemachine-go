@@ -1,0 +1,417 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"strings"
+	"time"
+
+	"gopkg.in/yaml.v3"
+
+	"github.com/pv/uniset-timemachine-go/internal/replay"
+	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
+	"github.com/pv/uniset-timemachine-go/internal/storage"
+	"github.com/pv/uniset-timemachine-go/internal/storage/clickhouse"
+	"github.com/pv/uniset-timemachine-go/internal/storage/memstore"
+	"github.com/pv/uniset-timemachine-go/internal/storage/postgres"
+	sqliteStore "github.com/pv/uniset-timemachine-go/internal/storage/sqlite"
+	"github.com/pv/uniset-timemachine-go/pkg/config"
+)
+
+type options struct {
+	configYAML    string
+	dbURL         string
+	config        string
+	sensorSet     string
+	from          string
+	to            string
+	step          time.Duration
+	window        time.Duration
+	speed         float64
+	output        string
+	smURL         string
+	smSupplier    string
+	smParamMode   string
+	smParamPrefix string
+	chTable       string
+	batchSize     int
+	verbose       bool
+	version       bool
+	showRange     bool
+}
+
+const version = "0.1.0-dev"
+
+func main() {
+	opts := parseFlags()
+
+	if opts.version {
+		fmt.Println("timemachine", version)
+		return
+	}
+
+	cfg, err := config.Load(opts.config)
+	if err != nil {
+		log.Fatalf("failed to load config %s: %v", opts.config, err)
+	}
+	sensors, err := cfg.Resolve(opts.sensorSet)
+	if err != nil {
+		log.Fatalf("failed to resolve --slist: %v", err)
+	}
+
+	fromTs, toTs, err := func() (time.Time, time.Time, error) {
+		if opts.showRange {
+			return time.Time{}, time.Time{}, nil
+		}
+		return parsePeriodRequired(opts.from, opts.to)
+	}()
+	if err != nil {
+		log.Fatalf("invalid period: %v", err)
+	}
+
+	ctx := context.Background()
+	store, closer := initStorage(ctx, opts, cfg, sensors, fromTs, toTs)
+	if closer != nil {
+		defer closer()
+	}
+
+	if opts.showRange {
+		printRange(ctx, store, sensors)
+		return
+	}
+
+	fmt.Fprintf(os.Stdout, "timemachine %s — console player (work in progress)\n", version)
+	fmt.Fprintf(os.Stdout, "  DB: %s\n  Config: %s\n  Sensors: %d (%s)\n  Period: %s → %s\n  Step: %s\n  Window: %s\n  Speed: %.2fx\n  Output: %s\n",
+		opts.dbURL, opts.config, len(sensors), opts.sensorSet, fromTs.Format(time.RFC3339), toTs.Format(time.RFC3339), opts.step, opts.window, opts.speed, opts.output)
+
+	client := initOutputClient(opts, cfg)
+	service := replay.Service{
+		Storage: store,
+		Output:  client,
+	}
+
+	params := replay.Params{
+		Sensors:   sensors,
+		From:      fromTs,
+		To:        toTs,
+		Step:      opts.step,
+		Window:    opts.window,
+		Speed:     opts.speed,
+		BatchSize: opts.batchSize,
+	}
+	if err := service.Run(ctx, params); err != nil {
+		log.Fatalf("replay failed: %v", err)
+	}
+}
+
+func parseFlags() options {
+	var opt options
+
+	flag.StringVar(&opt.configYAML, "config-yaml", "", "path to YAML file with default flag values")
+	flag.StringVar(&opt.dbURL, "db", "", "database connection string (postgres://... or file:test.db)")
+	flag.StringVar(&opt.config, "confile", "", "path to sensor configuration (XML/JSON)")
+	flag.StringVar(&opt.sensorSet, "slist", "ALL", "sensor list or set name from config")
+	flag.StringVar(&opt.from, "from", "", "start of playback period (RFC3339)")
+	flag.StringVar(&opt.to, "to", "", "end of playback period (RFC3339)")
+
+	flag.DurationVar(&opt.step, "step", time.Second, "playback step (e.g. 1s, 500ms)")
+	flag.DurationVar(&opt.window, "window", 5*time.Minute, "preload window from DB")
+	flag.Float64Var(&opt.speed, "speed", 1.0, "playback speed multiplier")
+	flag.IntVar(&opt.batchSize, "batch-size", 1024, "max sensor updates per payload batch")
+	flag.StringVar(&opt.output, "output", "http", "output mode (http or stdout)")
+	flag.StringVar(&opt.smURL, "sm-url", "http://localhost:8998", "SharedMemory HTTP endpoint base URL")
+	flag.StringVar(&opt.smSupplier, "sm-supplier", "TimeMachine", "SharedMemory supplier name")
+	flag.StringVar(&opt.smParamMode, "sm-param-mode", "id", "SharedMemory parameter mode (id or name)")
+	flag.StringVar(&opt.smParamPrefix, "sm-param-prefix", "id", "Prefix for sensor parameters (use empty to send raw IDs)")
+	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
+	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
+	flag.BoolVar(&opt.version, "version", false, "print version and exit")
+	flag.BoolVar(&opt.showRange, "show-range", false, "print available time range and exit")
+
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options]\n\n", os.Args[0])
+		fmt.Fprintln(flag.CommandLine.Output(), "Sensor history player prototype. Example:")
+		fmt.Fprintf(flag.CommandLine.Output(), "  %s --db postgres://user:pass@host/db --confile sensors.yaml --from 2024-06-01T00:00:00Z --to 2024-06-01T01:00:00Z\n\n", os.Args[0])
+		flag.PrintDefaults()
+	}
+
+	if cfgPath := findConfigYAML(os.Args[1:]); cfgPath != "" {
+		if err := applyYAMLDefaults(cfgPath); err != nil {
+			log.Fatalf("failed to apply --config-yaml: %v", err)
+		}
+		_ = flag.CommandLine.Set("config-yaml", cfgPath)
+	}
+
+	flag.Parse()
+	return opt
+}
+
+func parsePeriodRequired(from, to string) (time.Time, time.Time, error) {
+	if from == "" || to == "" {
+		return time.Time{}, time.Time{}, fmt.Errorf("--from and --to are required")
+	}
+	return parsePeriodOptional(from, to)
+}
+
+func parsePeriodOptional(from, to string) (time.Time, time.Time, error) {
+	if from == "" && to == "" {
+		return time.Time{}, time.Time{}, nil
+	}
+	start, err := time.Parse(time.RFC3339, from)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid --from: %w", err)
+	}
+	finish, err := time.Parse(time.RFC3339, to)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("invalid --to: %w", err)
+	}
+	if !finish.After(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("--to (%s) must be greater than --from (%s)", finish, start)
+	}
+	return start, finish, nil
+}
+
+func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors []int64, from, to time.Time) (storage.Storage, func()) {
+	if opts.dbURL == "" {
+		return memstore.NewExampleStore(sensors, from, to, opts.step), nil
+	}
+
+	if postgres.IsPostgresURL(opts.dbURL) {
+		pgStore, err := postgres.New(ctx, postgres.Config{ConnString: opts.dbURL})
+		if err != nil {
+			log.Fatalf("postgres storage error: %v", err)
+		}
+		return pgStore, pgStore.Close
+	}
+
+	if sqliteStore.IsSource(opts.dbURL) {
+		src := sqliteStore.NormalizeSource(opts.dbURL)
+		sqlite, err := sqliteStore.New(ctx, sqliteStore.Config{Source: src})
+		if err != nil {
+			log.Fatalf("sqlite storage error: %v", err)
+		}
+		return sqlite, sqlite.Close
+	}
+
+	if clickhouse.IsSource(opts.dbURL) {
+		chStore, err := clickhouse.New(ctx, clickhouse.Config{
+			DSN:      opts.dbURL,
+			Table:    opts.chTable,
+			Resolver: configResolver{cfg: cfg},
+		})
+		if err != nil {
+			log.Fatalf("clickhouse storage error: %v", err)
+		}
+		return chStore, chStore.Close
+	}
+
+	log.Fatalf("unsupported --db value: %s", opts.dbURL)
+	return nil, nil
+}
+
+func printRange(ctx context.Context, store storage.Storage, sensors []int64) {
+	min, max, err := store.Range(ctx, sensors)
+	if err != nil {
+		log.Fatalf("failed to fetch range: %v", err)
+	}
+	if min.IsZero() || max.IsZero() {
+		fmt.Println("No data range found (possibly no records)")
+		return
+	}
+	fmt.Printf("Available range: %s → %s\n", min.Format(time.RFC3339), max.Format(time.RFC3339))
+}
+
+type configResolver struct {
+	cfg *config.Config
+}
+
+func (r configResolver) NameByID(id int64) (string, bool) {
+	if r.cfg == nil {
+		return "", false
+	}
+	return r.cfg.NameByID(id)
+}
+
+func (r configResolver) IDByName(name string) (int64, bool) {
+	if r.cfg == nil {
+		return 0, false
+	}
+	return r.cfg.IDByName(name)
+}
+
+func findConfigYAML(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if strings.HasPrefix(arg, "--config-yaml=") {
+			return strings.TrimPrefix(arg, "--config-yaml=")
+		}
+		if arg == "--config-yaml" && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
+}
+
+func applyYAMLDefaults(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var raw map[string]interface{}
+	if err := yaml.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	flat := flattenYAML(raw)
+	for key, value := range flat {
+		flagName := yamlKeyToFlag(key)
+		if flagName == "" {
+			flagName = key
+		}
+		flagDef := flag.Lookup(flagName)
+		if flagDef == nil {
+			continue
+		}
+		valStr := formatFlagValue(value)
+		if err := flag.CommandLine.Set(flagName, valStr); err != nil {
+			return fmt.Errorf("set flag %s: %w", flagName, err)
+		}
+	}
+	return nil
+}
+
+func initOutputClient(opt options, cfg *config.Config) sharedmem.Client {
+	switch strings.ToLower(opt.output) {
+	case "stdout":
+		return &sharedmem.StdoutClient{Writer: os.Stdout}
+	case "http", "":
+		if opt.smURL == "" {
+			log.Fatalf("--sm-url is required for http output")
+		}
+		var logger *log.Logger
+		if opt.verbose {
+			logger = log.New(os.Stdout, "[sm] ", log.LstdFlags)
+		}
+		paramFormatter := makeParamFormatter(opt, cfg)
+		return &sharedmem.HTTPClient{
+			BaseURL:        opt.smURL,
+			Supplier:       opt.smSupplier,
+			ParamFormatter: paramFormatter,
+			Logger:         logger,
+		}
+	default:
+		log.Fatalf("unsupported --output value: %s", opt.output)
+		return nil
+	}
+}
+
+func makeParamFormatter(opt options, cfg *config.Config) sharedmem.ParamFormatter {
+	mode := strings.ToLower(opt.smParamMode)
+	prefix := opt.smParamPrefix
+	switch mode {
+	case "id", "":
+		return func(update sharedmem.SensorUpdate) string {
+			return fmt.Sprintf("%s%d", prefix, update.ID)
+		}
+	case "name":
+		idToName := make(map[int64]string, len(cfg.Sensors))
+		for name, id := range cfg.Sensors {
+			idToName[id] = name
+		}
+		return func(update sharedmem.SensorUpdate) string {
+			if name, ok := idToName[update.ID]; ok && name != "" {
+				return name
+			}
+			return fmt.Sprintf("%s%d", prefix, update.ID)
+		}
+	default:
+		log.Fatalf("unsupported --sm-param-mode value: %s", opt.smParamMode)
+		return nil
+	}
+}
+
+func flattenYAML(raw map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	for key, value := range raw {
+		flattenYAMLValue(key, value, out)
+	}
+	return out
+}
+
+func flattenYAMLValue(prefix string, value interface{}, out map[string]interface{}) {
+	switch val := value.(type) {
+	case map[string]interface{}:
+		for k, v := range val {
+			next := k
+			if prefix != "" {
+				next = prefix + "." + k
+			}
+			flattenYAMLValue(next, v, out)
+		}
+	case map[interface{}]interface{}:
+		for k, v := range val {
+			keyStr := fmt.Sprintf("%v", k)
+			next := keyStr
+			if prefix != "" {
+				next = prefix + "." + keyStr
+			}
+			flattenYAMLValue(next, v, out)
+		}
+	default:
+		if prefix != "" {
+			out[prefix] = value
+		}
+	}
+}
+
+func yamlKeyToFlag(key string) string {
+	key = strings.ToLower(key)
+	key = strings.ReplaceAll(key, "_", "-")
+	mapped := map[string]string{
+		"database.dsn":           "db",
+		"database.url":           "db",
+		"database.table":         "ch-table",
+		"database.step":          "step",
+		"database.window":        "window",
+		"database.speed":         "speed",
+		"database.batch-size":    "batch-size",
+		"sensors.selector":       "slist",
+		"sensors.slist":          "slist",
+		"sensors.list":           "slist",
+		"sensors.set":            "slist",
+		"sensors.config":         "confile",
+		"sensors.file":           "confile",
+		"sensors.confile":        "confile",
+		"sensors.from":           "from",
+		"sensors.to":             "to",
+		"output.mode":            "output",
+		"output.sm-url":          "sm-url",
+		"output.sm-supplier":     "sm-supplier",
+		"output.sm-param-mode":   "sm-param-mode",
+		"output.sm-param-prefix": "sm-param-prefix",
+		"output.batch-size":      "batch-size",
+		"output.verbose":         "v",
+	}
+	if flagName, ok := mapped[key]; ok {
+		return flagName
+	}
+	return ""
+}
+
+func formatFlagValue(value interface{}) string {
+	switch v := value.(type) {
+	case time.Time:
+		return v.Format(time.RFC3339)
+	case *time.Time:
+		if v == nil {
+			return ""
+		}
+		return v.Format(time.RFC3339)
+	case time.Duration:
+		return v.String()
+	default:
+		return fmt.Sprintf("%v", value)
+	}
+}

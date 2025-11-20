@@ -1,0 +1,16 @@
+{
+  "sensors": {
+    "Input1_S": 1001,
+    "Input2_S": 1002,
+    "Output1_C": 2001
+  },
+  "sets": {
+    "default": [
+      "Input1_S",
+      "Input2_S"
+    ],
+    "outputs": [
+      "Output1_C"
+    ]
+  }
+}

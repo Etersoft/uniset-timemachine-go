@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tm-postgres
+    restart: unless-stopped
+    environment:
+      - "PGDATA=/var/lib/postgresql/data/pg_data"
+      - "POSTGRES_DB=uniset"
+      - "POSTGRES_USER=admin"
+      - "POSTGRES_PASSWORD=123"
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/postgres-init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d uniset"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8-alpine
+    container_name: tm-clickhouse
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "8123:8123"
+    volumes:
+      - chdata:/var/lib/clickhouse
+      - ./scripts/clickhouse-init.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query='SELECT 1'"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata: {}
+  chdata: {}

@@ -1,0 +1,5 @@
+.gocache/
+.gomodcache/
+.env
+sqlite-large.db
+config/generated-sensors.xml

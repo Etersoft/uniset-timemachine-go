@@ -43,6 +43,7 @@ uniset-timemachine-go — консольный проигрыватель ист
 
 ## Тестирование
 - Базовый минимум — `go test ./...`. Если меняли `pkg/config`, добавьте кейсы с XML/JSON; если модифицировали `internal/replay`, покрывайте поведение шагов и батчей, а для `internal/sharedmem/httpclient` пишите интеграционные тесты с `httptest.Server`.
+- В среде с ограничениями песочницы используйте `GOFLAGS=-mod=mod` и запускайте команды, требующие сетевого доступа (скачивание модулей/доступ к БД/докеру), с `with_escalated_permissions: true`, чтобы избегать ошибок `import lookup disabled by -mod=vendor` и `socket: operation not permitted`.
 - Перед нагрузочными тестами SharedMemory выполните `make check-sm` (делает `/set` и `/get` для сенсора 10001) и убедитесь, что SM поднят на `http://localhost:9191/api/v01/SharedMemory`.
 - Изменения в хранилищах проверяйте минимум на SQLite и Postgres, а при работе с ClickHouse дополнительно прогоняйте `go run ./cmd/timemachine ... --db clickhouse://... --ch-table uniset.main_history` после `make ch-up` и наполнения `gen-clickhouse-data`.
 - Для больших серий (5k/50k датчиков) пользуйтесь `make gen-sensors`, `make gen-db` либо сидерами `cmd/gen-*-data` и моделируйте шаг 150 мс, батчи по 500 элементов; фиксируйте среднее время `/set` в логах `-v`.

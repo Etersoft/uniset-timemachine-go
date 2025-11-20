@@ -120,3 +120,202 @@ func TestServiceRunBatchesUpdates(t *testing.T) {
 		t.Fatalf("unexpected step/order: %v", stepIDs)
 	}
 }
+
+type controlStorage struct {
+	warmup []storage.SensorEvent
+	events []storage.SensorEvent
+}
+
+func (s *controlStorage) Warmup(context.Context, []int64, time.Time) ([]storage.SensorEvent, error) {
+	return append([]storage.SensorEvent(nil), s.warmup...), nil
+}
+
+func (s *controlStorage) Stream(ctx context.Context, req storage.StreamRequest) (<-chan []storage.SensorEvent, <-chan error) {
+	dataCh := make(chan []storage.SensorEvent, 1)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer close(dataCh)
+		defer close(errCh)
+
+		var batch []storage.SensorEvent
+		for _, ev := range s.events {
+			if ev.Timestamp.Before(req.From) {
+				continue
+			}
+			if !ev.Timestamp.Before(req.To) {
+				continue
+			}
+			batch = append(batch, ev)
+		}
+		if len(batch) > 0 {
+			select {
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			case dataCh <- batch:
+			}
+		}
+	}()
+
+	return dataCh, errCh
+}
+
+func (s *controlStorage) Range(context.Context, []int64) (time.Time, time.Time, error) {
+	return time.Time{}, time.Time{}, nil
+}
+
+func TestRunWithControlStepBackwardApply(t *testing.T) {
+	from := time.Date(2025, 11, 21, 0, 0, 0, 0, time.UTC)
+	st := &controlStorage{
+		warmup: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: from.Add(-time.Second), Value: 5},
+		},
+		events: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: from, Value: 10},
+			{SensorID: 1, Timestamp: from.Add(time.Second), Value: 20},
+		},
+	}
+	client := &fakeClient{}
+	cmdCh := make(chan Command, 4)
+	stepCh := make(chan StepInfo, 4)
+
+	svc := Service{Storage: st, Output: client}
+	params := Params{
+		Sensors:   []int64{1},
+		From:      from,
+		To:        from.Add(2 * time.Second),
+		Step:      time.Second,
+		Window:    time.Second,
+		Speed:     1000,
+		BatchSize: 10,
+	}
+
+	go func() {
+		_ = svc.RunWithControl(context.Background(), params, Control{
+			Commands: cmdCh,
+			OnStep: func(info StepInfo) {
+				stepCh <- info
+			},
+		})
+	}()
+
+	waitStep := func(expected int64) {
+		t.Helper()
+		select {
+		case info := <-stepCh:
+			if info.StepID != expected {
+				t.Fatalf("unexpected step id: %d, want %d", info.StepID, expected)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for step %d", expected)
+		}
+	}
+
+	waitStep(1)
+
+	sendCmd := func(cmd Command) {
+		resp := make(chan error, 1)
+		cmd.Resp = resp
+		cmdCh <- cmd
+		select {
+		case err := <-resp:
+			if err != nil {
+				t.Fatalf("command %v returned error: %v", cmd.Type, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("command %v timeout", cmd.Type)
+		}
+	}
+
+	sendCmd(Command{Type: CommandPause})
+	sendCmd(Command{Type: CommandStepBackward, Apply: true})
+	// Stop may return ErrStopped; treat it as success.
+	resp := make(chan error, 1)
+	cmdCh <- Command{Type: CommandStop, Resp: resp}
+	select {
+	case err := <-resp:
+		if err != nil && err.Error() != (ErrStopped{}).Error() {
+			t.Fatalf("stop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stop command timeout")
+	}
+
+	if len(client.payloads) == 0 {
+		t.Fatalf("expected snapshot payload after step backward")
+	}
+	last := client.payloads[len(client.payloads)-1]
+	if last.StepTs != from.Format(time.RFC3339) {
+		t.Fatalf("unexpected snapshot ts: %s", last.StepTs)
+	}
+	if len(last.Updates) != 1 || last.Updates[0].Value != 5 {
+		t.Fatalf("unexpected snapshot updates: %+v", last.Updates)
+	}
+}
+
+func TestRunWithControlSeekApply(t *testing.T) {
+	from := time.Date(2025, 11, 21, 0, 0, 0, 0, time.UTC)
+	target := from.Add(2 * time.Second)
+	st := &controlStorage{
+		warmup: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: from.Add(-time.Second), Value: 1},
+		},
+		events: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: target, Value: 2},
+		},
+	}
+
+	client := &fakeClient{}
+	cmdCh := make(chan Command, 2)
+
+	svc := Service{Storage: st, Output: client}
+	params := Params{
+		Sensors:   []int64{1},
+		From:      from,
+		To:        from.Add(3 * time.Second),
+		Step:      time.Second,
+		Window:    time.Second,
+		Speed:     1000,
+		BatchSize: 10,
+	}
+
+	go func() {
+		_ = svc.RunWithControl(context.Background(), params, Control{
+			Commands: cmdCh,
+		})
+	}()
+
+respCh := make(chan error, 1)
+	cmdCh <- Command{Type: CommandSeek, TS: target, Apply: true, Resp: respCh}
+	select {
+	case err := <-respCh:
+		if err != nil {
+			t.Fatalf("seek returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("seek command timeout")
+	}
+
+	stopResp := make(chan error, 1)
+	cmdCh <- Command{Type: CommandStop, Resp: stopResp}
+	select {
+	case err := <-stopResp:
+		if err != nil && err.Error() != (ErrStopped{}).Error() {
+			t.Fatalf("stop returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("stop command timeout")
+	}
+
+	if len(client.payloads) == 0 {
+		t.Fatalf("expected snapshot after seek apply")
+	}
+	snap := client.payloads[len(client.payloads)-1]
+	if snap.StepTs != target.Format(time.RFC3339) {
+		t.Fatalf("snapshot ts mismatch: %s", snap.StepTs)
+	}
+	if len(snap.Updates) != 1 || snap.Updates[0].Value != 1 {
+		t.Fatalf("snapshot updates mismatch: %+v", snap.Updates)
+	}
+}

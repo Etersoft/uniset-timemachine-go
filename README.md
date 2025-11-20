@@ -1,13 +1,14 @@
 # uniset-timemachine-go
 
-Консольный проигрыватель истории датчиков на Go. Цель — читать изменения из PostgreSQL/SQLite, интерполировать состояния на заданном шаге и публиковать их в SharedMemory либо stdout.
+Консольный проигрыватель истории датчиков на Go. Читает изменения из PostgreSQL/SQLite/ClickHouse, интерполирует состояния на шаге и публикует их в SharedMemory либо stdout. Поддерживает HTTP-режим управления (pause/resume/step/seek/apply) поверх того же ядра.
 
-## Предлагаемая структура
-- `cmd/timemachine/main.go` — CLI с разбором флагов (конфиг, список датчиков, период, шаг, драйвер БД).
-- `pkg/config` — загрузка XML/YAML-конфига uniset, маппинг имён датчиков на internal ID.
-- `internal/storage` — адаптеры к PostgreSQL/SQLite, батч-загрузки историй, кеширование по окнам.
-- `internal/replay` — планировщик времени, интерполяция «последнего известного значения», управление таймером и сигналами.
-- `internal/sharedmem` — тонкая обёртка над POSIX SHM/мем-сегментом uniset, fallback на stdout/JSON для тестов.
+## Внутренние модули
+- `cmd/timemachine` — CLI и HTTP-режим (`--http-addr`), разбор флагов.
+- `pkg/config` — загрузка XML/JSON UniSet, маппинг имён датчиков и наборов.
+- `internal/storage` — адаптеры Postgres/SQLite/ClickHouse/memstore, warmup/stream/range.
+- `internal/replay` — цикл воспроизведения, управление шагами, батчи обновлений.
+- `internal/sharedmem` — клиенты SM (HTTP) и stdout для тестов.
+- `internal/api` — однозадачный HTTP API управления проигрывателем.
 
 ## Конфигурация
 
@@ -24,6 +25,16 @@ CLI принимает флаг `--confile` с путём к XML/JSON и `--slis
 - `-v/--verbose` — логировать каждый запрос `/set` и ответ SM.
 
 Чтобы вернуться к консольному выводу, укажите `--output stdout`.
+
+### HTTP-режим управления
+
+Запустите сервер управления с теми же параметрами БД/SM, что и CLI:
+
+```bash
+go run ./cmd/timemachine --http-addr :8080 --db ... --confile config/test.xml --slist "Sensor?????_S" --output http --sm-url http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc
+```
+
+Далее управляйте через HTTP (start/pause/resume/step/seek/apply/snapshot, status/state). Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 
 ### YAML с параметрами по умолчанию
 
@@ -125,10 +136,3 @@ make clean-bench
 `make bench` теперь читает параметры из `CONFIG_YAML` (по умолчанию `config/config.yaml`). Хотите другой сценарий — создайте отдельный YAML (например, `config/config-sqlite.yaml` с `db: sqlite://sqlite-large.db`) и передайте `CONFIG_YAML=config/config-sqlite.yaml make bench`. При необходимости добавляйте единичные флаги через `BENCH_FLAGS`, например `BENCH_FLAGS="--show-range" make bench`. `--batch-size` задаёт, сколько обновлений помещается в один `/set`: при ~5000 датчиках каждая итерация разбивается примерно на 10 запросов по 500 записей. Паттерн `Sensor1????_S` охватывает все специальные датчики `Sensor10001_S` … `Sensor15099_S` из `config/test.xml`. Файл `config/generated-sensors.xml` подключён в `config/test.xml` через XInclude, поэтому достаточно пересоздать его командой `make gen-sensors`.
 
 Для быстрой проверки связи с SM используйте `make check-sm SM_TEST_SENSOR=10001 SM_TEST_SUPPLIER=TestProc`, он отправляет одиночный `/set` и проверяет `/get`. Цель автоматически пробует подхватить `SM_CONFIG_YAML` (по умолчанию `config/config.yaml`), чтобы взять `output.sm_url` и `output.sm_supplier` без явных флагов; при необходимости задайте `SM_EXTRA_FLAGS="--value 42"` или выключите YAML `SM_CONFIG_YAML=`. После запуска нагрузочного теста выполните `make clean-bench`, чтобы удалить `sqlite-large.db` и сгенерированный список сенсоров.
-
-## Ближайшие шаги
-1. Реализовать в `internal/storage` загрузку окна истории для набора датчиков с пагинацией и тестами на mock DB.
-2. Написать в `internal/replay` цикл проигрывания: таймер, буферизация, очереди обновлений, события для sharedmem.
-3. Добавить настоящие клиенты SharedMemory (HTTP/WebSocket) и интегрировать их с CLI.
-- `--show-range` — вывести доступный диапазон времени для выбранных датчиков и выйти (работает для Postgres и SQLite).
-- `--batch-size` — ограничить количество обновлений в одном `StepPayload`, чтобы разбивать крупные шаги на несколько пакетов.

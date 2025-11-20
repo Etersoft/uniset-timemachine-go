@@ -1,0 +1,42 @@
+package replay
+
+import "time"
+
+// CommandType задаёт тип управляющей команды.
+type CommandType int
+
+const (
+	CommandPause CommandType = iota + 1
+	CommandResume
+	CommandStop
+	CommandStepForward
+	CommandStepBackward
+	CommandSeek
+	CommandApply
+)
+
+// Command передаёт управляющее сообщение в RunWithControl.
+type Command struct {
+	Type  CommandType
+	TS    time.Time
+	Apply bool
+	Resp  chan<- error
+}
+
+// Control объединяет каналы управления и коллбеки прогресса.
+type Control struct {
+	Commands <-chan Command
+	OnStep   func(StepInfo)
+}
+
+// StepInfo описывает прогресс шага при управляемом проигрывании.
+type StepInfo struct {
+	StepID       int64
+	StepTs       time.Time
+	UpdatesCount int
+}
+
+// ErrStopped возвращается при остановке через команду Stop.
+type ErrStopped struct{}
+
+func (ErrStopped) Error() string { return "stopped" }

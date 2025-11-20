@@ -11,6 +11,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/pv/uniset-timemachine-go/internal/api"
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
 	"github.com/pv/uniset-timemachine-go/internal/storage"
@@ -38,6 +39,7 @@ type options struct {
 	smParamPrefix string
 	chTable       string
 	batchSize     int
+	httpAddr      string
 	verbose       bool
 	version       bool
 	showRange     bool
@@ -63,6 +65,10 @@ func main() {
 	}
 
 	fromTs, toTs, err := func() (time.Time, time.Time, error) {
+		if opts.httpAddr != "" {
+			// В режиме serve диапазон задаётся через API, поэтому флаги from/to могут быть пустыми.
+			return parsePeriodOptional(opts.from, opts.to)
+		}
 		if opts.showRange {
 			return time.Time{}, time.Time{}, nil
 		}
@@ -76,6 +82,11 @@ func main() {
 	store, closer := initStorage(ctx, opts, cfg, sensors, fromTs, toTs)
 	if closer != nil {
 		defer closer()
+	}
+
+	if opts.httpAddr != "" {
+		runHTTPServer(ctx, opts, cfg, sensors, store)
+		return
 	}
 
 	if opts.showRange {
@@ -127,6 +138,7 @@ func parseFlags() options {
 	flag.StringVar(&opt.smParamMode, "sm-param-mode", "id", "SharedMemory parameter mode (id or name)")
 	flag.StringVar(&opt.smParamPrefix, "sm-param-prefix", "id", "Prefix for sensor parameters (use empty to send raw IDs)")
 	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
+	flag.StringVar(&opt.httpAddr, "http-addr", "", "run HTTP control server on the given addr (e.g. :8080)")
 	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
 	flag.BoolVar(&opt.version, "version", false, "print version and exit")
 	flag.BoolVar(&opt.showRange, "show-range", false, "print available time range and exit")
@@ -329,6 +341,26 @@ func makeParamFormatter(opt options, cfg *config.Config) sharedmem.ParamFormatte
 	default:
 		log.Fatalf("unsupported --sm-param-mode value: %s", opt.smParamMode)
 		return nil
+	}
+}
+
+func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors []int64, store storage.Storage) {
+	if opt.dbURL == "" {
+		log.Fatalf("serve mode requires --db storage")
+	}
+	service := replay.Service{
+		Storage: store,
+		Output:  initOutputClient(opt, cfg),
+	}
+	manager := api.NewManager(service, sensors, opt.speed, opt.window, opt.batchSize)
+	server := api.NewServer(manager)
+	addr := opt.httpAddr
+	if addr == "" {
+		addr = ":8080"
+	}
+	log.Printf("starting HTTP control server on %s", addr)
+	if err := server.Listen(ctx, addr); err != nil && err != context.Canceled {
+		log.Fatalf("http server error: %v", err)
 	}
 }
 

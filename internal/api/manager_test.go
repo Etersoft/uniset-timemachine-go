@@ -22,7 +22,7 @@ func newTestManager(t *testing.T) *Manager {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	return NewManager(svc, []int64{1, 2}, 1000, step, 8)
+	return NewManager(svc, []int64{1, 2}, nil, 1000, step, 8, nil)
 }
 
 func TestManagerStartConflictAndStop(t *testing.T) {

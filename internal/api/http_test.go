@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -32,7 +34,8 @@ func (s *apiTestStorage) Stream(ctx context.Context, req storage.StreamRequest) 
 }
 
 func (s *apiTestStorage) Range(context.Context, []int64) (time.Time, time.Time, error) {
-	return time.Time{}, time.Time{}, nil
+	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	return start, start.Add(10 * time.Second), nil
 }
 
 type apiTestClient struct {
@@ -50,9 +53,18 @@ func newTestServer(t *testing.T) (*httptest.Server, *Manager) {
 		Storage: &apiTestStorage{},
 		Output:  &apiTestClient{},
 	}
-	mgr := NewManager(svc, []int64{1, 2}, 1.0, time.Second, 16)
-	srv := NewServer(mgr)
-	return httptest.NewServer(srv.mux), mgr
+	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil)
+	srv := NewServer(mgr, nil)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skip: tcp listen not permitted: %v", err)
+	}
+	testSrv := httptest.NewUnstartedServer(srv.mux)
+	testSrv.Listener = ln
+	testSrv.Start()
+	t.Cleanup(testSrv.Close)
+	return testSrv, mgr
 }
 
 func TestJobStartConflict(t *testing.T) {
@@ -140,6 +152,48 @@ func TestStepBackwardSeekApplySnapshot(t *testing.T) {
 	}
 
 	postJSON(t, ts.URL+"/api/v1/job/stop", nil)
+}
+
+func TestUIIndexServed(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/ui/")
+	if err != nil {
+		t.Fatalf("get /ui/: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status /ui/ = %d, want 200", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read /ui/ body: %v", err)
+	}
+	if !bytes.Contains(body, []byte("TimeMachine Player")) {
+		t.Fatalf("ui index missing expected marker, got: %s", string(body))
+	}
+}
+
+func TestRangeEndpoint(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	resp, err := http.Get(ts.URL + "/api/v1/range")
+	if err != nil {
+		t.Fatalf("get /range: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("range status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode range: %v", err)
+	}
+	if body["from"] == "" || body["to"] == "" {
+		t.Fatalf("range response empty: %#v", body)
+	}
 }
 
 func postJSON(t *testing.T, url string, body map[string]any) *http.Response {

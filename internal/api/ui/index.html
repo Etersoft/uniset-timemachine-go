@@ -1,0 +1,855 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <title>TimeMachine Player</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root { font-family: "Space Grotesk", "Inter", "Segoe UI", system-ui, -apple-system, sans-serif; color: #e5e7eb; background: #0b1220; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at 10% 10%, rgba(20,184,166,0.08), transparent 22%), radial-gradient(circle at 80% 0%, rgba(14,165,233,0.12), transparent 30%), #0b1220; }
+    .page { max-width: 1200px; margin: 0 auto; padding: 26px 18px 60px; }
+    .header { display: flex; justify-content: space-between; gap: 14px; align-items: center; }
+    .title h1 { margin: 4px 0 6px; font-size: 26px; color: #f8fafc; letter-spacing: -0.01em; }
+    .eyebrow { text-transform: uppercase; font-size: 12px; letter-spacing: 0.24em; color: #93c5fd; margin: 0; }
+    .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .chip { padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #e2e8f0; font-weight: 600; font-size: 13px; }
+    .chip.ok { color: #10b981; border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.12); }
+    .chip.warn { color: #f59e0b; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.12); }
+    .chip.err { color: #f87171; border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.12); }
+    .card { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 14px 16px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); margin-top: 14px; }
+    .row { display: flex; gap: 10px; }
+    .row.wrap { flex-wrap: wrap; }
+    .row.center { align-items: center; }
+    label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
+    input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #233143; background: #0b1324; color: #e2e8f0; font-size: 14px; outline: none; }
+    input:focus { border-color: #22d3ee; box-shadow: 0 0 0 3px rgba(34,211,238,0.12); }
+    button { border: none; border-radius: 12px; padding: 12px; background: linear-gradient(135deg, #0ea5e9, #14b8a6); color: #0b1220; font-weight: 700; cursor: pointer; transition: transform 0.08s ease, box-shadow 0.14s ease, opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s; }
+    button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(14,165,233,0.35); }
+    button:active:not(:disabled) { background: linear-gradient(135deg, #0284c7, #0ea5e9); box-shadow: 0 6px 18px rgba(14,165,233,0.28); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; background: #1b2535; color: #94a3b8; }
+    .ghost { background: rgba(255,255,255,0.06); color: #e2e8f0; border: 1px solid #1f2937; }
+    .play-btn { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; }
+    .play-btn.primary { background: linear-gradient(135deg, #0ea5e9, #14b8a6); color: #0b1220; box-shadow: 0 10px 28px rgba(14,165,233,0.35); }
+    .input-with-btn { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+    .picker-btn { width: 42px; padding: 10px 0; border-radius: 10px; border: 1px solid #233143; background: #111a2b; color: #e2e8f0; font-weight: 700; }
+    .picker-btn:hover { border-color: #22d3ee; color: #22d3ee; }
+    .preset-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .preset-btn { padding: 8px 10px; border-radius: 10px; background: #111a2b; border: 1px solid #233143; color: #e2e8f0; font-weight: 600; cursor: pointer; }
+    .preset-btn:hover { border-color: #22d3ee; color: #22d3ee; }
+    .status-line { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .status-item { background: #0b1324; border: 1px solid #1f2937; border-radius: 10px; padding: 8px 10px; color: #e5e7eb; font-weight: 600; min-width: 120px; }
+    .status-item span { color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; display: block; }
+    .badge-done { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.35); color: #34d399; border-radius: 8px; padding: 4px 8px; display: inline-block; font-weight: 700; }
+    .error-text { color: #f87171; min-height: 18px; font-size: 13px; }
+    .muted { color: #94a3b8; font-size: 12px; }
+    .timeline { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; }
+    .timeline input[type="range"] { width: 100%; accent-color: #22d3ee; }
+    .timeline-label { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: #cbd5e1; }
+    .player { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .toggle { display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px; }
+    .log { background: #0b1324; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; max-height: 280px; overflow: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: #e2e8f0; }
+    .log-entry { padding: 7px 8px; border-radius: 8px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.03); }
+    .log-entry.ok { border-color: rgba(16,185,129,0.4); }
+    .log-entry.err { border-color: rgba(248,113,113,0.45); }
+    .log-entry .ts { color: #9ca3af; font-size: 11px; margin-bottom: 2px; }
+    dialog { border: 1px solid #1f2937; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 16px; min-width: 320px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
+    dialog::backdrop { background: rgba(0,0,0,0.55); }
+    .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+    .tabs { display: flex; gap: 10px; margin: 16px 0 4px; }
+    .tab { padding: 10px 14px; border-radius: 12px; border: 1px solid #1f2937; background: #0f172a; color: #e2e8f0; font-weight: 700; cursor: pointer; }
+    .tab.active { border-color: #22d3ee; box-shadow: 0 8px 24px rgba(34,211,238,0.16); }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+    .table-wrap { overflow: auto; max-height: 520px; border: 1px solid #1f2937; border-radius: 12px; }
+    table { width: 100%; border-collapse: collapse; background: #0f141a; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f2937; color: #e5e7eb; }
+    th { position: sticky; top: 0; background: #111a24; z-index: 1; }
+    tbody tr:nth-child(odd) { background-color: #111821; }
+    tbody tr:nth-child(even) { background-color: #131c26; }
+    tbody tr.changed { position: relative; }
+    tbody tr.changed td:first-child { position: relative; }
+    tbody tr.changed td:first-child::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #1c93d3; opacity: 0.9; }
+    td.value { font-family: "JetBrains Mono", ui-monospace, monospace; width: 140px; white-space: nowrap; }
+    th.value { width: 140px; }
+    .table-meta { color: #94a3b8; font-size: 13px; }
+    .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid #1f2937; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <div class="title">
+        <p class="eyebrow">TimeMachine · Player</p>
+        <h1>Проигрыватель истории</h1>
+        <div class="chips">
+          <span class="chip ok" id="chipStatus">idle</span>
+          <span class="chip warn">polling 1.5s</span>
+          <span class="chip">REST /api/v1/*</span>
+        </div>
+      </div>
+      <div class="status-line" style="justify-content:flex-end;">
+        <div class="status-item"><span>Step</span><div id="statStep">-</div></div>
+        <div class="status-item"><span>TS</span><div id="statTs">-</div></div>
+        <div class="status-item"><span>Updates</span><div id="statUpdates">-</div></div>
+      </div>
+    </div>
+
+    <div class="tabs">
+      <button class="tab active" data-tab="control">Управление</button>
+      <button class="tab" data-tab="table">SViewer</button>
+    </div>
+
+    <div id="panel-control" class="tab-panel active">
+    <div class="card">
+      <div class="row wrap">
+        <div style="flex:2; min-width: 260px;">
+          <label for="from">From</label>
+          <div class="input-with-btn">
+            <input id="from" type="text" placeholder="2024-06-01T00:00:00Z">
+            <button class="picker-btn" data-picker="from" type="button">…</button>
+          </div>
+        </div>
+        <div style="flex:2; min-width: 260px;">
+          <label for="to">To</label>
+          <div class="input-with-btn">
+            <input id="to" type="text" placeholder="2024-06-01T01:00:00Z">
+            <button class="picker-btn" data-picker="to" type="button">…</button>
+          </div>
+        </div>
+        <div style="flex:1; min-width: 140px;">
+          <label for="step">Шаг</label>
+          <input id="step" type="text" value="1s">
+        </div>
+        <div style="flex:1; min-width: 120px;">
+          <label for="speed">Скорость</label>
+          <input id="speed" type="number" step="0.1" value="1">
+        </div>
+        <div style="flex:1; min-width: 140px;">
+          <label for="window">Окно</label>
+          <input id="window" type="text" value="5s">
+        </div>
+      </div>
+      <div class="preset-row" style="margin-top:8px;">
+        <span class="muted">Быстрый диапазон:</span>
+        <button class="preset-btn" data-preset-min="5" type="button">5м</button>
+        <button class="preset-btn" data-preset-min="10" type="button">10м</button>
+        <button class="preset-btn" data-preset-min="30" type="button">30м</button>
+        <button class="preset-btn" data-preset-min="60" type="button">1ч</button>
+        <button class="preset-btn" data-preset-min="180" type="button">3ч</button>
+        <button class="preset-btn" id="rangeBtn" type="button">Установить доступный диапазон</button>
+      </div>
+      <div class="muted" id="startErrors"></div>
+    </div>
+
+    <div class="card">
+      <div class="timeline">
+        <div class="timeline-label" id="fromLabel">from: -</div>
+        <input id="timeline" type="range" min="0" max="1000" value="0" disabled>
+        <div class="timeline-label" id="toLabel">to: -</div>
+      </div>
+      <div class="row center" style="justify-content:space-between; margin-top:8px; gap:10px; flex-wrap:wrap; width:100%;">
+        <div style="flex:1; display:flex; justify-content:flex-start;">
+          <button class="ghost" id="jumpStartBtn" type="button" style="padding:8px 10px;">В начало</button>
+        </div>
+        <div style="flex:1; display:flex; justify-content:center;">
+          <div class="status-item" style="min-width:200px; text-align:center;">
+            <div id="currentLabel">-</div>
+          </div>
+        </div>
+        <div style="flex:1; display:flex; justify-content:flex-end;">
+          <button class="ghost" id="jumpEndBtn" type="button" style="padding:8px 10px;">В конец</button>
+        </div>
+      </div>
+      <div class="muted" id="errorNote" style="text-align:center; margin-top:6px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="player">
+        <button id="stepBackBtn" class="ghost">⏮ Шаг назад</button>
+        <button id="playPauseBtn" class="play-btn">▶️ Play</button>
+        <button id="stopBtn" class="ghost">■ Stop</button>
+        <button id="stepFwdBtn">⏭ Шаг вперёд</button>
+      </div>
+      <div class="row wrap" style="margin-top:10px; gap:12px; align-items:flex-end;">
+        <div class="status-item" style="min-width:140px;"><span>Status</span><div id="statusBadge">idle</div></div>
+        <div style="flex:1; min-width: 240px;">
+          <label for="seekManualTs">Seek конкретное время</label>
+          <div class="input-with-btn">
+            <input id="seekManualTs" type="text" placeholder="2024-06-01T00:00:10Z">
+            <button class="picker-btn" data-picker="seekManualTs" type="button">…</button>
+          </div>
+        </div>
+        <div style="flex:0 0 140px; display:flex; align-items:flex-end;">
+          <button id="seekManualBtn" class="ghost" style="width:100%;">Seek</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="row center" style="justify-content:space-between;">
+        <h3 style="margin:0; color:#f8fafc;">Лог</h3>
+        <button class="ghost" id="clearLogBtn" style="padding:8px 10px;">Очистить</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+    </div>
+
+    <div id="panel-table" class="tab-panel">
+      <div class="card">
+        <div class="row center" style="justify-content:space-between;">
+          <h3 style="margin:0; color:#f8fafc;">SViewer — таблица значений</h3>
+          <div class="row center" style="gap:10px; flex:1; justify-content:flex-end;">
+            <span class="table-meta" id="tableMeta">—</span>
+            <input id="tableFilter" type="text" placeholder="Фильтр по имени или описанию" style="max-width:320px;">
+          </div>
+        </div>
+        <div class="table-wrap" style="margin-top:10px;">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:180px;">Name</th>
+                <th class="value">Value</th>
+                <th>Text</th>
+              </tr>
+            </thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="datetimeDialog">
+    <form method="dialog">
+      <h3 style="margin:0 0 6px;">Выбор даты/времени</h3>
+      <p class="muted" style="margin:0 0 10px;">Локальное время → сохраняем как RFC3339 с Z.</p>
+      <input id="dtInput" type="datetime-local" step="1" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0;">
+      <div class="dlg-actions">
+        <button type="submit" value="cancel" class="ghost">Отмена</button>
+        <button type="submit" value="ok">Применить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const els = {
+      inputs: {
+        from: document.getElementById('from'),
+        to: document.getElementById('to'),
+        step: document.getElementById('step'),
+        speed: document.getElementById('speed'),
+        window: document.getElementById('window'),
+      },
+      tabs: document.querySelectorAll('[data-tab]'),
+      panels: {
+        control: document.getElementById('panel-control'),
+        table: document.getElementById('panel-table'),
+      },
+      startErrors: document.getElementById('startErrors'),
+      chipStatus: document.getElementById('chipStatus'),
+      status: {
+        badge: document.getElementById('statusBadge'),
+        error: document.getElementById('errorNote'),
+        step: document.getElementById('statStep'),
+        ts: document.getElementById('statTs'),
+        updates: document.getElementById('statUpdates'),
+      },
+      timeline: document.getElementById('timeline'),
+      fromLabel: document.getElementById('fromLabel'),
+      toLabel: document.getElementById('toLabel'),
+      currentLabel: document.getElementById('currentLabel'),
+      controls: {
+        stepBack: document.getElementById('stepBackBtn'),
+        playPause: document.getElementById('playPauseBtn'),
+        stop: document.getElementById('stopBtn'),
+        stepFwd: document.getElementById('stepFwdBtn'),
+        seekManual: document.getElementById('seekManualBtn'),
+        jumpStart: document.getElementById('jumpStartBtn'),
+        jumpEnd: document.getElementById('jumpEndBtn'),
+      },
+      log: document.getElementById('log'),
+      clearLog: document.getElementById('clearLogBtn'),
+      snapTs: document.getElementById('snapTs'),
+      seekManualTs: document.getElementById('seekManualTs'),
+      dialog: document.getElementById('datetimeDialog'),
+      dialogInput: document.getElementById('dtInput'),
+      table: {
+        body: document.getElementById('tableBody'),
+        filter: document.getElementById('tableFilter'),
+        meta: document.getElementById('tableMeta'),
+      },
+      rangeBtn: document.getElementById('rangeBtn'),
+    };
+
+    const state = {
+      model: { status: 'idle' },
+      pollingMs: 1500,
+      pollErrorNotified: false,
+      ws: null,
+      reconnectIn: null,
+      rangeOverride: null,
+    };
+
+    const tableState = {
+      rows: new Map(),
+      meta: new Map(),
+      filter: '',
+      lastStep: '-',
+      lastTs: '-',
+    };
+
+    function log(message, ok = true) {
+      const row = document.createElement('div');
+      row.className = `log-entry ${ok ? 'ok' : 'err'}`;
+      row.innerHTML = `<div class="ts">${new Date().toLocaleTimeString()}</div><div>${message}</div>`;
+      els.log.prepend(row);
+      while (els.log.children.length > 200) {
+        els.log.removeChild(els.log.lastChild);
+      }
+    }
+
+    function setTab(tab) {
+      els.tabs.forEach(btn => btn.classList.toggle('active', btn.dataset.tab === tab));
+      Object.entries(els.panels).forEach(([name, node]) => {
+        if (!node) return;
+        node.classList.toggle('active', name === tab);
+      });
+    }
+
+    function connectWS() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      const host = location.host || 'localhost:8080';
+      const url = `${proto}://${host}/api/v1/ws/state`;
+      try {
+        const ws = new WebSocket(url);
+        state.ws = ws;
+        ws.onopen = () => log('WS: connected');
+        ws.onclose = () => {
+          state.ws = null;
+          if (state.reconnectIn) clearTimeout(state.reconnectIn);
+          state.reconnectIn = setTimeout(connectWS, 2000);
+        };
+        ws.onerror = () => ws.close();
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            handleWSMessage(msg);
+          } catch (err) {
+            log(`WS parse: ${err.message}`, false);
+          }
+        };
+      } catch (err) {
+        log(`WS connect: ${err.message}`, false);
+      }
+    }
+
+    function unixToISO(v) {
+      if (!Number.isFinite(v) || v <= 0) return '';
+      const d = new Date(v);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    }
+
+    function handleWSMessage(msg) {
+      if (!msg || typeof msg !== 'object') return;
+      const tsStr = msg.step_ts || unixToISO(msg.step_unix);
+      if (msg.step_id !== undefined) {
+        tableState.lastStep = msg.step_id || 0;
+      }
+      if (tsStr) {
+        tableState.lastTs = tsStr;
+      }
+      switch (msg.type) {
+        case 'reset':
+          tableState.rows.clear();
+          tableState.meta.clear();
+          renderTable(true);
+          break;
+        case 'snapshot':
+          applySnapshot(msg.updates || [], tsStr);
+          break;
+        case 'updates':
+          applyTableUpdates(msg.updates || [], tsStr);
+          break;
+        default:
+          break;
+      }
+      renderTable();
+    }
+
+    function applySnapshot(list, tsStr) {
+      if (!Array.isArray(list)) return;
+      list.forEach(item => {
+        const key = Number(item.id);
+        if (!Number.isFinite(key)) return;
+        tableState.meta.set(key, {
+          name: item.name || `id${key}`,
+          textname: item.textname || '',
+        });
+        const hasValue = !!item.has_value || !!item.hasValue;
+        if (hasValue) {
+          tableState.rows.set(key, {
+            id: key,
+            name: item.name || `id${key}`,
+            textname: item.textname || '',
+            value: item.value,
+            hasValue: true,
+            stepID: tableState.lastStep || 0,
+            ts: tsStr || '',
+          });
+        }
+      });
+    }
+
+    function applyTableUpdates(list, tsStr) {
+      if (!Array.isArray(list)) return;
+      const now = Date.now();
+      list.forEach(item => {
+        const key = Number(item.id);
+        if (!Number.isFinite(key)) return;
+        const prev = tableState.rows.get(key) || {};
+        const hadValue = prev.hasValue;
+        const changed = !hadValue || prev.value !== item.value;
+        const meta = tableState.meta.get(key) || {};
+        tableState.rows.set(key, {
+          id: key,
+          name: meta.name || prev.name || `id${key}`,
+          textname: meta.textname || prev.textname || '',
+          value: item.value,
+          hasValue: !!item.has_value || item.hasValue || hadValue,
+          stepID: item.step_id || tableState.lastStep || prev.stepID || 0,
+          ts: tsStr || tableState.lastTs || prev.ts || '',
+          changedAt: changed ? now : prev.changedAt,
+        });
+      });
+    }
+
+    function renderTable(force) {
+      if (!els.table.body) return;
+      const rows = Array.from(tableState.rows.values());
+      const filter = (tableState.filter || '').trim();
+      const filtered = filter
+        ? rows.filter(r => {
+            const name = (r.name || '').toLowerCase();
+            const textname = (r.textname || '').toLowerCase();
+            return name.includes(filter) || textname.includes(filter);
+          })
+        : rows;
+      filtered.sort((a, b) => {
+        if (a.name === b.name) return a.id - b.id;
+        return a.name.localeCompare(b.name);
+      });
+      const now = Date.now();
+      const html = filtered.map(r => {
+        const isChanged = r.changedAt && now - r.changedAt < 4000;
+        const value = r.hasValue ? r.value : '—';
+        return `<tr class="${isChanged ? 'changed' : ''}"><td>${r.name || ''}</td><td class="value">${value}</td><td>${r.textname || ''}</td></tr>`;
+      }).join('');
+      els.table.body.innerHTML = html || `<tr><td colspan="3" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
+      if (els.table.meta) {
+        const ts = tableState.lastTs || '—';
+        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts}`;
+      }
+    }
+
+    function requestJSON(method, url, body) {
+      const init = { method, headers: {} };
+      if (body !== undefined) {
+        init.headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(body);
+      }
+      return fetch(url, init).then(async (resp) => {
+        const text = await resp.text();
+        let payload = null;
+        if (text) { try { payload = JSON.parse(text); } catch (_) {} }
+        if (!resp.ok) {
+          throw new Error(payload?.error || text || `HTTP ${resp.status}`);
+        }
+        return payload;
+      });
+    }
+
+    function statusNormalize(s) {
+      return String(s || 'idle').toLowerCase();
+    }
+
+    function parseISO(v) {
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d;
+    }
+
+    function getRange(params) {
+      let from = parseISO(params.From || params.from);
+      let to = parseISO(params.To || params.to);
+      if ((!from || !to || to <= from) && state.rangeOverride) {
+        from = state.rangeOverride.from;
+        to = state.rangeOverride.to;
+      }
+      return { from, to, valid: !!from && !!to && to > from };
+    }
+
+    function updateStatusView() {
+      const st = statusNormalize(state.model.status);
+      const params = state.model.params || state.model.Params || {};
+      const stepID = state.model.step_id ?? state.model.StepID ?? '-';
+      const lastTs = state.model.last_ts ?? state.model.LastTS ?? '-';
+      const updates = state.model.updates_sent ?? state.model.UpdatesSent ?? '-';
+      els.status.badge.textContent = st;
+      els.chipStatus.textContent = st;
+      els.status.step.textContent = stepID;
+      els.status.ts.textContent = lastTs;
+      els.status.updates.textContent = updates;
+      els.status.error.textContent = state.model.error ? `Ошибка: ${state.model.error}` : '';
+      els.chipStatus.classList.remove('ok', 'warn', 'err');
+      if (st === 'running') els.chipStatus.classList.add('ok');
+      if (st === 'paused') els.chipStatus.classList.add('warn');
+      if (st === 'failed') els.chipStatus.classList.add('err');
+      if (st === 'done') {
+        els.status.badge.classList.add('badge-done');
+      } else {
+        els.status.badge.classList.remove('badge-done');
+      }
+      updateTimeline();
+      updateControls();
+    }
+
+    function updateTimeline() {
+      const params = state.model.params || state.model.Params || {};
+      const range = getRange(params);
+      const cur = parseISO(state.model.last_ts || state.model.LastTS);
+      const slider = els.timeline;
+      if (!range.valid) {
+        slider.disabled = true;
+        slider.value = 0;
+        els.fromLabel.textContent = 'from: -';
+        els.toLabel.textContent = 'to: -';
+        els.currentLabel.textContent = '-';
+        return;
+      }
+      els.fromLabel.textContent = `from: ${range.from.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+      els.toLabel.textContent = `to: ${range.to.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+      slider.disabled = false;
+      const rangeMs = range.to - range.from;
+      let pos = 0;
+      if (cur) {
+        pos = Math.max(0, Math.min(1, (cur - range.from) / rangeMs));
+        els.currentLabel.textContent = cur.toISOString().replace(/\.\d{3}Z$/, 'Z');
+      } else {
+        els.currentLabel.textContent = '-';
+      }
+      slider.value = Math.round(pos * 1000);
+    }
+
+    function updateControls() {
+      const st = statusNormalize(state.model.status);
+      const params = state.model.params || state.model.Params || {};
+      const range = getRange(params);
+      const active = st === 'running' || st === 'paused' || st === 'stopping';
+      const paused = st === 'paused';
+      const curTs = parseISO(state.model.last_ts || state.model.LastTS);
+      const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
+
+      setDisabled(els.controls.stepBack, st === 'failed' || !range.valid || !paused || atStart);
+      setDisabled(els.controls.stepFwd, st === 'failed' || !range.valid || !paused);
+      setDisabled(els.controls.stop, !active);
+      // Play доступна почти всегда; в running подсвечиваем как primary (Pause).
+      setDisabled(els.controls.playPause, st === 'failed');
+      els.controls.playPause.textContent = paused || st === 'idle' || st === 'done' ? '▶️ Play' : '⏸ Pause';
+      els.controls.playPause.classList.toggle('primary', st === 'running');
+      // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
+      setDisabled(els.timeline, !range.valid);
+      if (els.rangeBtn) {
+        setDisabled(els.rangeBtn, active); // не трогаем диапазон во время активной задачи
+      }
+      if (els.controls.jumpStart) {
+        setDisabled(els.controls.jumpStart, !range.valid || active);
+      }
+      if (els.controls.jumpEnd) {
+        setDisabled(els.controls.jumpEnd, !range.valid || active);
+      }
+    }
+
+    function setDisabled(el, disabled) {
+      if (!el) return;
+      el.disabled = !!disabled;
+    }
+
+    function validateStartForm() {
+      const errors = [];
+      const from = els.inputs.from.value.trim();
+      const to = els.inputs.to.value.trim();
+      const step = els.inputs.step.value.trim();
+      const speedVal = els.inputs.speed.value.trim();
+      const windowVal = els.inputs.window.value.trim();
+      if (!isValidISO(from)) errors.push('From: RFC3339, например 2024-06-01T00:00:00Z.');
+      if (!isValidISO(to)) errors.push('To: RFC3339.');
+      if (isValidISO(from) && isValidISO(to) && new Date(to) <= new Date(from)) errors.push('To позже From.');
+      if (!isValidDuration(step)) errors.push('Step: 1s/200ms/1m.');
+      let speed = parseFloat(speedVal || '1');
+      if (!Number.isFinite(speed) || speed <= 0) errors.push('Speed: положительное число.');
+      if (windowVal && !isValidDuration(windowVal)) errors.push('Window: 5s/1m.');
+      els.startErrors.textContent = errors.join(' ');
+      if (errors.length) return null;
+      const payload = { from, to, step, speed };
+      if (windowVal) payload.window = windowVal;
+      return payload;
+    }
+
+    function isValidISO(v) {
+      const d = new Date(v);
+      return v && !Number.isNaN(d.getTime());
+    }
+
+    function isValidDuration(v) {
+      return /^\d+(ms|s|m|h)$/.test(v);
+    }
+
+    async function refresh(full = false) {
+      const url = full ? '/api/v1/job' : '/api/v1/job/state';
+      const data = await requestJSON('GET', url);
+      const status = statusNormalize(data?.status || data?.Status || state.model.status);
+      let merged = full ? { ...state.model, ...data, status } : { ...state.model, ...data, status };
+      if (status === 'idle') {
+        const prevParams = state.model.params || state.model.Params;
+        const newParams = merged.params || merged.Params;
+        const prevRange = getRange(prevParams || {});
+        const newRange = getRange(newParams || {});
+        if (!newRange.valid && prevRange.valid) {
+          merged.params = prevParams;
+          merged.Params = prevParams;
+        }
+        if (state.rangeOverride) {
+          merged.params = merged.params || {};
+          merged.Params = merged.params;
+          merged.params.From = state.rangeOverride.from.toISOString().replace(/\.\d{3}Z$/, 'Z');
+          merged.params.To = state.rangeOverride.to.toISOString().replace(/\.\d{3}Z$/, 'Z');
+          merged.last_ts = state.model.last_ts || merged.last_ts;
+        } else if (!merged.last_ts && state.model.last_ts) {
+          merged.last_ts = state.model.last_ts;
+        }
+      }
+      state.model = merged;
+      updateStatusView();
+    }
+
+    async function startJob() {
+      const payload = validateStartForm();
+      if (!payload) return;
+      try {
+        await requestJSON('POST', '/api/v1/job', payload);
+        log('Старт отправлен');
+        await refresh(true);
+      } catch (err) {
+        log(`Старт: ${err.message}`, false);
+      }
+    }
+
+    function bindActions() {
+      els.tabs.forEach(btn => {
+        btn.addEventListener('click', () => setTab(btn.dataset.tab));
+      });
+      if (els.table.filter) {
+        els.table.filter.addEventListener('input', () => {
+          tableState.filter = els.table.filter.value.toLowerCase();
+          renderTable();
+        });
+      }
+      document.querySelectorAll('[data-preset-min]').forEach(btn => {
+        btn.addEventListener('click', () => applyPresetMinutes(parseInt(btn.dataset.presetMin, 10)));
+      });
+      document.querySelectorAll('[data-picker]').forEach(btn => {
+        btn.addEventListener('click', () => openPicker(btn.dataset.picker));
+      });
+      els.dialog.addEventListener('close', () => {
+        if (els.dialog.returnValue !== 'ok') return;
+        const target = els.dialog.dataset.target;
+        const val = els.dialogInput.value;
+        if (!target || !val) return;
+        const iso = localInputToISO(val);
+        const input = document.getElementById(target);
+        if (input && iso) input.value = iso;
+      });
+      els.timeline.addEventListener('change', onTimelineSeek);
+      els.timeline.addEventListener('input', onTimelinePreview);
+      els.controls.stepBack.addEventListener('click', () => action('step назад', '/api/v1/job/step/backward', { apply: true }));
+      els.controls.stepFwd.addEventListener('click', () => action('step вперёд', '/api/v1/job/step/forward'));
+      els.controls.stop.addEventListener('click', () => action('stop', '/api/v1/job/stop'));
+      els.controls.playPause.addEventListener('click', onPlayPause);
+      els.controls.seekManual.addEventListener('click', () => {
+        const ts = els.seekManualTs.value.trim();
+        action('seek', '/api/v1/job/seek', { ts, apply: false });
+      });
+      els.clearLog.addEventListener('click', () => { els.log.innerHTML = ''; });
+      if (els.rangeBtn) {
+        els.rangeBtn.addEventListener('click', () => applyAvailableRange());
+      }
+      if (els.controls.jumpStart) {
+        els.controls.jumpStart.addEventListener('click', () => jumpToEdge('start'));
+      }
+      if (els.controls.jumpEnd) {
+        els.controls.jumpEnd.addEventListener('click', () => jumpToEdge('end'));
+      }
+    }
+
+    async function onPlayPause() {
+      const st = statusNormalize(state.model.status);
+      if (st === 'running') {
+        await action('pause', '/api/v1/job/pause');
+      } else if (st === 'paused') {
+        await action('resume', '/api/v1/job/resume');
+      } else {
+        await startJob();
+      }
+    }
+
+    function onTimelinePreview() {
+      const params = state.model.params || state.model.Params || {};
+      const from = parseISO(params.From || params.from);
+      const to = parseISO(params.To || params.to);
+      if (!from || !to || to <= from) return;
+      const v = Number(els.timeline.value) / 1000;
+      const ts = new Date(from.getTime() + (to - from) * v);
+      els.currentLabel.textContent = `seek: ${ts.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+    }
+
+    async function onTimelineSeek() {
+      const params = state.model.params || state.model.Params || {};
+      const from = parseISO(params.From || params.from);
+      const to = parseISO(params.To || params.to);
+      if (!from || !to || to <= from) return;
+      const v = Number(els.timeline.value) / 1000;
+      const ts = new Date(from.getTime() + (to - from) * v).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      await seekOrPreview(ts);
+    }
+
+    async function action(label, url, body, refreshFull = true) {
+      try {
+        await requestJSON('POST', url, body);
+        log(`${label}: ok`);
+        await refresh(refreshFull);
+      } catch (err) {
+        log(`${label}: ${err.message}`, false);
+      }
+    }
+
+    function openPicker(targetId) {
+      const input = document.getElementById(targetId);
+      const current = input ? input.value.trim() : '';
+      els.dialog.dataset.target = targetId;
+      els.dialogInput.value = isoToLocalInput(current) || '';
+      els.dialog.showModal();
+    }
+
+    function isoToLocalInput(iso) {
+      const d = parseISO(iso);
+      if (!d) return '';
+      const pad = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+
+    function localInputToISO(val) {
+      if (!val) return '';
+      const d = new Date(val);
+      if (Number.isNaN(d.getTime())) return '';
+      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    }
+
+    function applyPresetMinutes(mins) {
+      if (!Number.isFinite(mins) || mins <= 0) return;
+      const now = new Date();
+      const from = new Date(now.getTime() - mins * 60 * 1000);
+      els.inputs.from.value = toRFC3339(from);
+      els.inputs.to.value = toRFC3339(now);
+    }
+
+    async function jumpToEdge(where) {
+      const params = state.model.params || state.model.Params || {};
+      const range = getRange(params);
+      if (!range.valid) {
+        log('Нет диапазона для перемещения', false);
+        return;
+      }
+      let target = where === 'end' ? range.to : range.from;
+      els.seekManualTs.value = target.toISOString().replace(/\.\d{3}Z$/, 'Z');
+      await seekOrPreview(target.toISOString().replace(/\.\d{3}Z$/, 'Z'));
+    }
+
+    async function seekOrPreview(ts) {
+      const st = statusNormalize(state.model.status);
+      const params = state.model.params || state.model.Params || {};
+      const range = getRange(params);
+      if (!range.valid) return;
+      if (st === 'running' || st === 'paused' || st === 'stopping') {
+        await action('seek', '/api/v1/job/seek', { ts, apply: false });
+        return;
+      }
+      // Нет активной задачи — просто двигаем курсор и запоминаем стартовую точку.
+      state.model.last_ts = ts;
+      state.rangeOverride = { from: range.from, to: range.to };
+      els.inputs.from.value = ts;
+      updateStatusView();
+      log(`Стартовая точка: ${ts}`);
+    }
+
+    function toRFC3339(d) {
+      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    }
+
+    async function startPolling() {
+      try { await refresh(true); } catch (err) { log(`Init: ${err.message}`, false); }
+      setInterval(async () => {
+        try {
+          await refresh(false);
+          state.pollErrorNotified = false;
+        } catch (err) {
+          if (!state.pollErrorNotified) {
+            log(`Poll: ${err.message}`, false);
+            state.pollErrorNotified = true;
+          }
+        }
+      }, state.pollingMs);
+    }
+
+    bindActions();
+    updateControls();
+    startPolling();
+    connectWS();
+    renderTable(true);
+
+    if (new URLSearchParams(location.search).get('test') === '1') {
+      const script = document.createElement('script');
+      script.src = '/ui/index.test.js';
+      script.defer = true;
+      document.body.appendChild(script);
+    }
+
+    async function applyAvailableRange() {
+      try {
+        const data = await requestJSON('GET', '/api/v1/range');
+        if (!data || !data.from || !data.to) {
+          log('Диапазон: нет данных', false);
+          return;
+        }
+        els.inputs.from.value = data.from;
+        els.inputs.to.value = data.to;
+        log(`Диапазон установлен: ${data.from} → ${data.to}`);
+        // Обновляем локальную модель диапазона и ставим текущее в начало.
+        state.model.params = state.model.params || {};
+        state.model.params.From = data.from;
+        state.model.params.To = data.to;
+        state.model.last_ts = data.from;
+        state.rangeOverride = {
+          from: parseISO(data.from),
+          to: parseISO(data.to),
+        };
+        updateStatusView();
+      } catch (err) {
+        log(`Диапазон: ${err.message}`, false);
+      }
+    }
+  </script>
+</body>
+</html>

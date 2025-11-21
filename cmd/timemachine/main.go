@@ -352,8 +352,9 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 		Storage: store,
 		Output:  initOutputClient(opt, cfg),
 	}
-	manager := api.NewManager(service, sensors, opt.speed, opt.window, opt.batchSize)
-	server := api.NewServer(manager)
+	streamer := api.NewStateStreamer()
+	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer)
+	server := api.NewServer(manager, streamer)
 	addr := opt.httpAddr
 	if addr == "" {
 		addr = ":8080"

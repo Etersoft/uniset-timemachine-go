@@ -2,25 +2,37 @@ package api
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"fmt"
+	"io/fs"
+	"log"
 	"net/http"
 	"time"
 )
 
 // Server реализует HTTP API управления проигрывателем.
 type Server struct {
-	manager *Manager
-	mux     *http.ServeMux
+	manager  *Manager
+	mux      *http.ServeMux
+	streamer *StateStreamer
 }
 
+//go:embed ui/*
+var staticFS embed.FS
+
 // NewServer создаёт HTTP сервер с зарегистрированными хендлерами.
-func NewServer(manager *Manager) *Server {
-	s := &Server{
-		manager: manager,
-		mux:     http.NewServeMux(),
+func NewServer(manager *Manager, streamer *StateStreamer) *Server {
+	uiFS, err := fs.Sub(staticFS, "ui")
+	if err != nil {
+		log.Fatalf("ui assets: %v", err)
 	}
-	s.routes()
+	s := &Server{
+		manager:  manager,
+		mux:      http.NewServeMux(),
+		streamer: streamer,
+	}
+	s.routes(http.FS(uiFS))
 	return s
 }
 
@@ -49,21 +61,44 @@ func (s *Server) Listen(ctx context.Context, addr string) error {
 	}
 }
 
-func (s *Server) routes() {
+func (s *Server) routes(uiFS http.FileSystem) {
 	s.mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok\n"))
 	})
-	s.mux.HandleFunc("/api/v1/job", s.handleJob)
-	s.mux.HandleFunc("/api/v1/job/pause", s.wrapSimple(s.manager.Pause))
-	s.mux.HandleFunc("/api/v1/job/resume", s.wrapSimple(s.manager.Resume))
-	s.mux.HandleFunc("/api/v1/job/stop", s.wrapSimple(s.manager.Stop))
-	s.mux.HandleFunc("/api/v1/job/apply", s.wrapSimple(s.manager.Apply))
-	s.mux.HandleFunc("/api/v1/job/step/forward", s.wrapSimple(s.manager.StepForward))
-	s.mux.HandleFunc("/api/v1/job/step/backward", s.handleStepBackward)
-	s.mux.HandleFunc("/api/v1/job/seek", s.handleSeek)
-	s.mux.HandleFunc("/api/v1/job/state", s.handleState)
-	s.mux.HandleFunc("/api/v1/snapshot", s.handleSnapshot)
+	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+	})
+	s.mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(uiFS)))
+	s.mux.Handle("/ui/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
+	s.mux.Handle("/ui/ui/", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
+	s.mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+	})
+	apiRoutes := []struct {
+		path    string
+		handler http.Handler
+	}{
+		{"/api/v1/job", http.HandlerFunc(s.handleJob)},
+		{"/api/v1/range", http.HandlerFunc(s.handleRange)},
+		{"/api/v1/job/pause", http.HandlerFunc(s.wrapSimple(s.manager.Pause))},
+		{"/api/v1/job/resume", http.HandlerFunc(s.wrapSimple(s.manager.Resume))},
+		{"/api/v1/job/stop", http.HandlerFunc(s.wrapSimple(s.manager.Stop))},
+		{"/api/v1/job/apply", http.HandlerFunc(s.wrapSimple(s.manager.Apply))},
+		{"/api/v1/job/step/forward", http.HandlerFunc(s.wrapSimple(s.manager.StepForward))},
+		{"/api/v1/job/step/backward", http.HandlerFunc(s.handleStepBackward)},
+		{"/api/v1/job/seek", http.HandlerFunc(s.handleSeek)},
+		{"/api/v1/job/state", http.HandlerFunc(s.handleState)},
+		{"/api/v1/snapshot", http.HandlerFunc(s.handleSnapshot)},
+		{"/api/v1/ws/state", http.HandlerFunc(s.handleWSState)},
+	}
+	for _, route := range apiRoutes {
+		s.mux.Handle(route.path, s.withCORS(route.handler))
+	}
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
@@ -187,6 +222,37 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	min, max, err := s.manager.Range(r.Context())
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	resp := map[string]string{
+		"from": "",
+		"to":   "",
+	}
+	if !min.IsZero() {
+		resp["from"] = min.Format(time.RFC3339)
+	}
+	if !max.IsZero() {
+		resp["to"] = max.Format(time.RFC3339)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleWSState(w http.ResponseWriter, r *http.Request) {
+	if s.streamer == nil {
+		http.Error(w, "websocket streamer not configured", http.StatusServiceUnavailable)
+		return
+	}
+	s.streamer.ServeWS(w, r)
+}
+
 func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -199,6 +265,19 @@ func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
+}
+
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 type startRequest struct {

@@ -8,17 +8,21 @@ import (
 	"time"
 
 	"github.com/pv/uniset-timemachine-go/internal/replay"
+	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 // Manager отвечает за одну задачу воспроизведения и её управление.
 type Manager struct {
 	mu sync.Mutex
 
-	service   replay.Service
-	sensors   []int64
-	defaults  defaults
-	job       *job
-	jobCancel context.CancelFunc
+	service    replay.Service
+	sensors    []int64
+	defaults   defaults
+	job        *job
+	jobCancel  context.CancelFunc
+	streamer   *StateStreamer
+	sensorInfo map[int64]SensorInfo
 }
 
 type defaults struct {
@@ -40,7 +44,8 @@ type job struct {
 }
 
 // NewManager создаёт менеджер с заданным сервисом и списком датчиков.
-func NewManager(service replay.Service, sensors []int64, speed float64, window time.Duration, batchSize int) *Manager {
+func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer) *Manager {
+	info := BuildSensorInfo(cfg, sensors)
 	return &Manager{
 		service: service,
 		sensors: sensors,
@@ -49,6 +54,8 @@ func NewManager(service replay.Service, sensors []int64, speed float64, window t
 			window:    window,
 			batchSize: batchSize,
 		},
+		streamer:   streamer,
+		sensorInfo: info,
 	}
 }
 
@@ -85,6 +92,10 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 		BatchSize: m.defaults.batchSize,
 	}
 
+	if m.streamer != nil {
+		m.streamer.Reset(m.sensorInfo)
+	}
+
 	// Держим задачу на фоновом контексте, чтобы она не завершалась сразу после ответа HTTP-хендлера.
 	jobCtx, cancel := context.WithCancel(context.Background())
 	m.jobCancel = cancel
@@ -108,6 +119,12 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 				m.job.stepID = info.StepID
 				m.job.lastTs = info.StepTs
 				m.job.updatesSent += int64(info.UpdatesCount)
+			},
+			OnUpdates: func(info replay.StepInfo, updates []sharedmem.SensorUpdate) {
+				if m.streamer == nil {
+					return
+				}
+				m.streamer.Publish(info, updates)
 			},
 		})
 		m.mu.Lock()
@@ -234,6 +251,11 @@ func (m *Manager) Snapshot(ctx context.Context, ts time.Time) (replay.StateSnaps
 	return replay.BuildState(ctx, m.service.Storage, params, ts)
 }
 
+// Range возвращает минимальный/максимальный timestamp для текущего списка датчиков.
+func (m *Manager) Range(ctx context.Context) (time.Time, time.Time, error) {
+	return m.service.Storage.Range(ctx, m.sensors)
+}
+
 type Status struct {
 	Status      string        `json:"status"`
 	Params      replay.Params `json:"params"`
@@ -254,14 +276,16 @@ type StateMeta struct {
 
 func (m *Manager) sendCommand(cmd replay.Command) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.job == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("no active job")
 	}
 	if m.job.status == "done" || m.job.status == "failed" {
+		m.mu.Unlock()
 		return fmt.Errorf("job is already finished")
 	}
 	if m.job.commands == nil {
+		m.mu.Unlock()
 		return fmt.Errorf("job is not controllable")
 	}
 	resp := make(chan error, 1)
@@ -269,12 +293,14 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 	select {
 	case m.job.commands <- cmd:
 	default:
+		m.mu.Unlock()
 		return fmt.Errorf("failed to enqueue command")
 	}
+	m.mu.Unlock()
 	select {
 	case err := <-resp:
 		return err
-	case <-time.After(5 * time.Second):
+	case <-time.After(30 * time.Second):
 		return fmt.Errorf("command timeout")
 	}
 }

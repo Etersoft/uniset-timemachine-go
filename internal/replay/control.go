@@ -1,6 +1,10 @@
 package replay
 
-import "time"
+import (
+	"time"
+
+	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
+)
 
 // CommandType задаёт тип управляющей команды.
 type CommandType int
@@ -25,8 +29,9 @@ type Command struct {
 
 // Control объединяет каналы управления и коллбеки прогресса.
 type Control struct {
-	Commands <-chan Command
-	OnStep   func(StepInfo)
+	Commands  <-chan Command
+	OnStep    func(StepInfo)
+	OnUpdates func(StepInfo, []sharedmem.SensorUpdate)
 }
 
 // StepInfo описывает прогресс шага при управляемом проигрывании.

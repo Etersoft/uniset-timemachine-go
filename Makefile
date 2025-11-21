@@ -2,7 +2,7 @@ TM_POSTGRES_DSN ?= postgres://admin:123@localhost:5432/uniset?sslmode=disable
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down ch-up ch-down gen-sensors gen-db bench check-sm clean-bench
+.PHONY: help pg-up pg-down ch-up ch-down gen-sensors gen-db bench check-sm clean-bench run
 
 help:
 	@echo "Available targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  bench       - run timemachine bench using $(CONFIG_YAML) (override via BENCH_FLAGS)"
 	@echo "  check-sm    - send test set/get to SharedMemory"
 	@echo "  clean-bench - remove generated SQLite/ClickHouse artifacts"
+	@echo "  run         - run timemachine in HTTP control mode (see RUN_FLAGS)"
 
 pg-up:
 	@docker compose up -d postgres
@@ -71,3 +72,9 @@ check-sm:
 
 clean-bench:
 	@rm -f sqlite-large.db config/generated-sensors.xml
+
+RUN_FLAGS ?= --http-addr :9090 --db sqlite://test.db --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:00:10Z --step 1s --output stdout
+
+run:
+	@echo "Running timemachine with $(RUN_FLAGS)"
+	@go run ./cmd/timemachine $(RUN_FLAGS)

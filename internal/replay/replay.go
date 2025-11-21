@@ -57,6 +57,8 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 		return fmt.Errorf("replay: warmup: %w", err)
 	}
 	applyEvents(state, warmupEvents, true)
+	cache := newStateCache(16)
+	cache.add(params.From, 0, state)
 
 	streamCtx, streamCancel := context.WithCancel(ctx)
 	defer func() {
@@ -88,14 +90,14 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 		}
 
 		if ctrl != nil {
-			if err := handleCommands(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce); err != nil {
+			if err := handleCommands(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
 				return err
 			}
 		}
 
 		if paused {
 			if ctrl != nil {
-				if err := waitWhilePaused(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce); err != nil {
+				if err := waitWhilePaused(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
 					return err
 				}
 			}
@@ -131,6 +133,14 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 			}
 		}
 
+		if ctrl != nil && ctrl.OnUpdates != nil {
+			ctrl.OnUpdates(StepInfo{
+				StepID:       stepID,
+				StepTs:       stepTs,
+				UpdatesCount: len(updates),
+			}, updates)
+		}
+
 		if ctrl != nil && ctrl.OnStep != nil {
 			ctrl.OnStep(StepInfo{
 				StepID:       stepID,
@@ -138,6 +148,7 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 				UpdatesCount: len(updates),
 			})
 		}
+		cache.add(stepTs, stepID, state)
 
 		if stepOnce {
 			paused = true
@@ -172,6 +183,47 @@ type sensorState struct {
 	value    float64
 	hasValue bool
 	dirty    bool
+}
+
+type cacheEntry struct {
+	ts     time.Time
+	stepID int64
+	state  map[int64]*sensorState
+}
+
+type stateCache struct {
+	entries []cacheEntry
+	limit   int
+}
+
+func newStateCache(limit int) *stateCache {
+	if limit <= 0 {
+		limit = 8
+	}
+	return &stateCache{limit: limit}
+}
+
+func (c *stateCache) add(ts time.Time, stepID int64, src map[int64]*sensorState) {
+	if c == nil {
+		return
+	}
+	cloned := cloneState(src)
+	c.entries = append(c.entries, cacheEntry{ts: ts, stepID: stepID, state: cloned})
+	if len(c.entries) > c.limit {
+		c.entries = c.entries[len(c.entries)-c.limit:]
+	}
+}
+
+func (c *stateCache) get(ts time.Time) (cacheEntry, bool) {
+	if c == nil {
+		return cacheEntry{}, false
+	}
+	for i := len(c.entries) - 1; i >= 0; i-- {
+		if c.entries[i].ts.Equal(ts) {
+			return c.entries[i], true
+		}
+	}
+	return cacheEntry{}, false
 }
 
 func applyEvents(state map[int64]*sensorState, events []storage.SensorEvent, markDirty bool) {
@@ -317,6 +369,7 @@ func handleCommands(
 	pending *[]storage.SensorEvent,
 	paused *bool,
 	stepOnce *bool,
+	cache *stateCache,
 ) error {
 	for {
 		select {
@@ -337,20 +390,11 @@ func handleCommands(
 				if target.Before(params.From) {
 					target = params.From
 				}
-				if err := rebuildState(ctx, s, params, target, state); err != nil {
+				if err := restoreState(ctx, s, params, target, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
 					respErr = err
 					break
 				}
-				if err := restartStream(ctx, s, params, target, streamCancel, eventCh, streamErr, pending); err != nil {
-					respErr = err
-					break
-				}
-				*stepTs = target
-				if target.Equal(params.From) {
-					*stepID = 1
-				} else {
-					*stepID = int64(target.Sub(params.From)/params.Step) + 1
-				}
+				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
 					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
@@ -366,16 +410,11 @@ func handleCommands(
 					respErr = fmt.Errorf("seek: target %s is outside range %s-%s", cmd.TS, params.From, params.To)
 					break
 				}
-				if err := rebuildState(ctx, s, params, cmd.TS, state); err != nil {
+				if err := restoreState(ctx, s, params, cmd.TS, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
 					respErr = err
 					break
 				}
-				if err := restartStream(ctx, s, params, cmd.TS, streamCancel, eventCh, streamErr, pending); err != nil {
-					respErr = err
-					break
-				}
-				*stepTs = cmd.TS
-				*stepID = int64(cmd.TS.Sub(params.From)/params.Step) + 1
+				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
 					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
@@ -415,6 +454,7 @@ func waitWhilePaused(
 	pending *[]storage.SensorEvent,
 	paused *bool,
 	stepOnce *bool,
+	cache *stateCache,
 ) error {
 	for *paused {
 		p, _ := drainEvents(*eventCh, *pending)
@@ -439,20 +479,11 @@ func waitWhilePaused(
 				if target.Before(params.From) {
 					target = params.From
 				}
-				if err := rebuildState(ctx, s, params, target, state); err != nil {
+				if err := restoreState(ctx, s, params, target, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
 					respErr = err
 					break
 				}
-				if err := restartStream(ctx, s, params, target, streamCancel, eventCh, streamErr, pending); err != nil {
-					respErr = err
-					break
-				}
-				*stepTs = target
-				if target.Equal(params.From) {
-					*stepID = 1
-				} else {
-					*stepID = int64(target.Sub(params.From)/params.Step) + 1
-				}
+				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
 					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
@@ -468,16 +499,11 @@ func waitWhilePaused(
 					respErr = fmt.Errorf("seek: target %s is outside range %s-%s", cmd.TS, params.From, params.To)
 					break
 				}
-				if err := rebuildState(ctx, s, params, cmd.TS, state); err != nil {
+				if err := restoreState(ctx, s, params, cmd.TS, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
 					respErr = err
 					break
 				}
-				if err := restartStream(ctx, s, params, cmd.TS, streamCancel, eventCh, streamErr, pending); err != nil {
-					respErr = err
-					break
-				}
-				*stepTs = cmd.TS
-				*stepID = int64(cmd.TS.Sub(params.From)/params.Step) + 1
+				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
 					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
@@ -519,16 +545,36 @@ func rebuildState(
 	if err != nil {
 		return err
 	}
-	newState := make(map[int64]*sensorState, len(snapshot.Values))
-	for _, id := range params.Sensors {
+	*state = snapshotToState(params.Sensors, snapshot.Values)
+	return nil
+}
+
+func snapshotToState(ids []int64, values map[int64]float64) map[int64]*sensorState {
+	newState := make(map[int64]*sensorState, len(ids))
+	for _, id := range ids {
 		newState[id] = &sensorState{}
 	}
-	for id, v := range snapshot.Values {
-		newState[id].value = v
-		newState[id].hasValue = true
+	for id, v := range values {
+		st := newState[id]
+		if st == nil {
+			st = &sensorState{}
+			newState[id] = st
+		}
+		st.value = v
+		st.hasValue = true
 	}
-	*state = newState
-	return nil
+	return newState
+}
+
+func cloneState(src map[int64]*sensorState) map[int64]*sensorState {
+	dst := make(map[int64]*sensorState, len(src))
+	for id, st := range src {
+		if st == nil {
+			continue
+		}
+		dst[id] = &sensorState{value: st.value, hasValue: st.hasValue}
+	}
+	return dst
 }
 
 func restartStream(
@@ -560,6 +606,41 @@ func restartStream(
 	return nil
 }
 
+func restoreState(
+	ctx context.Context,
+	s *Service,
+	params Params,
+	target time.Time,
+	state *map[int64]*sensorState,
+	stepTs *time.Time,
+	stepID *int64,
+	streamCancel *context.CancelFunc,
+	eventCh *<-chan storage.SensorEvent,
+	streamErr *<-chan error,
+	pending *[]storage.SensorEvent,
+	cache *stateCache,
+) error {
+	if entry, ok := cache.get(target); ok {
+		*state = cloneState(entry.state)
+		*stepTs = entry.ts
+		*stepID = entry.stepID
+	} else {
+		if err := rebuildState(ctx, s, params, target, state); err != nil {
+			return err
+		}
+		*stepTs = target
+		if target.Equal(params.From) {
+			*stepID = 1
+		} else {
+			*stepID = int64(target.Sub(params.From)/params.Step) + 1
+		}
+		cache.add(*stepTs, *stepID, *state)
+	}
+	if err := restartStream(ctx, s, params, *stepTs, streamCancel, eventCh, streamErr, pending); err != nil {
+		return err
+	}
+	return nil
+}
 func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[int64]*sensorState, stepID *int64, stepTs *time.Time) error {
 	updates := make([]sharedmem.SensorUpdate, 0, len(state))
 	for id, st := range state {
@@ -594,4 +675,15 @@ func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[
 		}
 	}
 	return nil
+}
+
+func notifyOnStep(ctrl *Control, stepID int64, stepTs time.Time, updates int) {
+	if ctrl == nil || ctrl.OnStep == nil {
+		return
+	}
+	ctrl.OnStep(StepInfo{
+		StepID:       stepID,
+		StepTs:       stepTs,
+		UpdatesCount: updates,
+	})
 }

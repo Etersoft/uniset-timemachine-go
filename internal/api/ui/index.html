@@ -87,7 +87,7 @@
         <div class="chips">
           <span class="chip ok" id="chipStatus">idle</span>
           <span class="chip warn">polling 1.5s</span>
-          <span class="chip">REST /api/v1/*</span>
+          <span class="chip">REST /api/v2/*</span>
         </div>
       </div>
       <div class="status-line" style="justify-content:flex-end;">
@@ -235,6 +235,7 @@
   </dialog>
 
   <script>
+    const logUI = (msg) => console.info(`[UI LOG] ${msg}`);
     const els = {
       inputs: {
         from: document.getElementById('from'),
@@ -283,6 +284,7 @@
       },
       rangeBtn: document.getElementById('rangeBtn'),
     };
+    const inputs = els.inputs;
 
     const state = {
       model: { status: 'idle' },
@@ -290,7 +292,7 @@
       pollErrorNotified: false,
       ws: null,
       reconnectIn: null,
-      rangeOverride: null,
+      previewTs: null,
     };
 
     const tableState = {
@@ -456,6 +458,7 @@
     }
 
     function requestJSON(method, url, body) {
+      logUI(`fetch ${method} ${url} body=${body ? JSON.stringify(body) : ''}`);
       const init = { method, headers: {} };
       if (body !== undefined) {
         init.headers['Content-Type'] = 'application/json';
@@ -465,6 +468,7 @@
         const text = await resp.text();
         let payload = null;
         if (text) { try { payload = JSON.parse(text); } catch (_) {} }
+        logUI(`fetch result ${resp.status} ${resp.statusText} payload=${text || '<empty>'}`);
         if (!resp.ok) {
           throw new Error(payload?.error || text || `HTTP ${resp.status}`);
         }
@@ -482,44 +486,97 @@
     }
 
     function getRange(params) {
-      let from = parseISO(params.From || params.from);
-      let to = parseISO(params.To || params.to);
-      if ((!from || !to || to <= from) && state.rangeOverride) {
-        from = state.rangeOverride.from;
-        to = state.rangeOverride.to;
-      }
+      const from = parseISO(params.From || params.from);
+      const to = parseISO(params.To || params.to);
       return { from, to, valid: !!from && !!to && to > from };
+    }
+
+    function getEffectiveRange(params, pending) {
+      const r1 = getRange(params || {});
+      if (r1.valid) return r1;
+      const pendingRange = pending?.range || pending?.Range || {};
+      const r2 = getRange(pendingRange);
+      if (pending?.range_set || pending?.RangeSet) {
+        return r2;
+      }
+      return r2.valid ? r2 : { from: null, to: null, valid: false };
+    }
+
+    function currentTsFromServer() {
+      const st = statusNormalize(state.model.status);
+      const pending = state.model.pending || state.model.Pending || {};
+      const pendingSeek = pending.seek_ts || pending.SeekTS;
+      const params = state.model.params || state.model.Params || {};
+      const range = getEffectiveRange(params, pending);
+      const lastTs = parseISO(state.model.last_ts || state.model.LastTS);
+      const pendingTs = pendingSeek ? parseISO(pendingSeek) : null;
+      // Во всех нерunning состояниях приоритет у pending seek (например, после stop/done).
+      if (st !== 'running' && st !== 'stopping' && pendingTs && !Number.isNaN(pendingTs.getTime()) && pendingTs.getFullYear() > 1) {
+        return pendingTs;
+      }
+      // В активных состояниях используем последний ts от сервера, если валиден.
+      if (lastTs && !Number.isNaN(lastTs.getTime()) && lastTs.getFullYear() > 1) {
+        return lastTs;
+      }
+      if ((st === 'idle' || st === 'pending') && pendingTs) {
+        return pendingTs;
+      }
+      if ((st === 'idle' || st === 'pending') && range.valid) {
+        return range.from;
+      }
+      if (pendingTs) {
+        return pendingTs;
+      }
+      if (range.valid) {
+        return range.from;
+      }
+      return null;
     }
 
     function updateStatusView() {
       const st = statusNormalize(state.model.status);
       const params = state.model.params || state.model.Params || {};
+      const pending = state.model.pending || state.model.Pending || {};
+      const pendingSeek = pending.seek_ts || pending.SeekTS;
+      const curTs = currentTsFromServer();
       const stepID = state.model.step_id ?? state.model.StepID ?? '-';
-      const lastTs = state.model.last_ts ?? state.model.LastTS ?? '-';
+      const lastTsText = curTs ? toRFC3339(curTs) : (state.model.last_ts ?? state.model.LastTS ?? '-');
       const updates = state.model.updates_sent ?? state.model.UpdatesSent ?? '-';
       els.status.badge.textContent = st;
       els.chipStatus.textContent = st;
       els.status.step.textContent = stepID;
-      els.status.ts.textContent = lastTs;
+      els.status.ts.textContent = lastTsText;
       els.status.updates.textContent = updates;
       els.status.error.textContent = state.model.error ? `Ошибка: ${state.model.error}` : '';
       els.chipStatus.classList.remove('ok', 'warn', 'err');
       if (st === 'running') els.chipStatus.classList.add('ok');
-      if (st === 'paused') els.chipStatus.classList.add('warn');
+      if (st === 'paused' || st === 'pending') els.chipStatus.classList.add('warn');
       if (st === 'failed') els.chipStatus.classList.add('err');
       if (st === 'done') {
         els.status.badge.classList.add('badge-done');
       } else {
         els.status.badge.classList.remove('badge-done');
       }
+      if (pendingSeek && (st === 'pending' || st === 'idle')) {
+        els.status.ts.textContent = pendingSeek;
+      }
       updateTimeline();
       updateControls();
+      logIndicators(st);
+    }
+
+    function logIndicators(status) {
+      const step = state.model.step_id || state.model.StepID || '-';
+      const ts = state.model.last_ts || state.model.LastTS || '-';
+      const updates = state.model.updates_sent || state.model.UpdatesSent || '-';
+      const pending = state.model.pending || state.model.Pending || {};
+      logUI(`indicators status=${status} step=${step} ts=${ts} updates=${updates} pendingRange=${pending.range_set || pending.RangeSet ? 'yes' : 'no'}`);
     }
 
     function updateTimeline() {
       const params = state.model.params || state.model.Params || {};
-      const range = getRange(params);
-      const cur = parseISO(state.model.last_ts || state.model.LastTS);
+      const pending = state.model.pending || state.model.Pending || {};
+      const range = getEffectiveRange(params, pending);
       const slider = els.timeline;
       if (!range.valid) {
         slider.disabled = true;
@@ -534,11 +591,17 @@
       slider.disabled = false;
       const rangeMs = range.to - range.from;
       let pos = 0;
-      if (cur) {
-        pos = Math.max(0, Math.min(1, (cur - range.from) / rangeMs));
-        els.currentLabel.textContent = cur.toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const st = statusNormalize(state.model.status);
+      let curTs = currentTsFromServer();
+      if (state.previewTs && st !== 'running' && st !== 'stopping') {
+        curTs = state.previewTs;
+      }
+      if (curTs) {
+        pos = Math.max(0, Math.min(1, (curTs - range.from) / rangeMs));
+        els.currentLabel.textContent = toRFC3339(curTs);
+        logUI(`timeline render ${toRFC3339(curTs)} source=${state.previewTs ? 'preview' : 'server'}`);
       } else {
-        els.currentLabel.textContent = '-';
+        els.currentLabel.textContent = pending.seek_ts || pending.SeekTS || toRFC3339(range.from) || '-';
       }
       slider.value = Math.round(pos * 1000);
     }
@@ -546,10 +609,11 @@
     function updateControls() {
       const st = statusNormalize(state.model.status);
       const params = state.model.params || state.model.Params || {};
-      const range = getRange(params);
+      const pending = state.model.pending || state.model.Pending || {};
+      const range = getEffectiveRange(params, pending);
       const active = st === 'running' || st === 'paused' || st === 'stopping';
       const paused = st === 'paused';
-      const curTs = parseISO(state.model.last_ts || state.model.LastTS);
+      const curTs = currentTsFromServer();
       const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
 
       setDisabled(els.controls.stepBack, st === 'failed' || !range.valid || !paused || atStart);
@@ -557,7 +621,8 @@
       setDisabled(els.controls.stop, !active);
       // Play доступна почти всегда; в running подсвечиваем как primary (Pause).
       setDisabled(els.controls.playPause, st === 'failed');
-      els.controls.playPause.textContent = paused || st === 'idle' || st === 'done' ? '▶️ Play' : '⏸ Pause';
+      const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
+      els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
       els.controls.playPause.classList.toggle('primary', st === 'running');
       // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
       setDisabled(els.timeline, !range.valid);
@@ -565,10 +630,10 @@
         setDisabled(els.rangeBtn, active); // не трогаем диапазон во время активной задачи
       }
       if (els.controls.jumpStart) {
-        setDisabled(els.controls.jumpStart, !range.valid || active);
+        setDisabled(els.controls.jumpStart, !range.valid || st === 'running' || st === 'stopping');
       }
       if (els.controls.jumpEnd) {
-        setDisabled(els.controls.jumpEnd, !range.valid || active);
+        setDisabled(els.controls.jumpEnd, !range.valid || st === 'running' || st === 'stopping');
       }
     }
 
@@ -608,38 +673,30 @@
     }
 
     async function refresh(full = false) {
-      const url = full ? '/api/v1/job' : '/api/v1/job/state';
+      const url = '/api/v2/job';
+      logUI(`refresh ${full ? 'full' : 'state'} start last_ts=${state.model.last_ts || state.model.LastTS}`);
       const data = await requestJSON('GET', url);
       const status = statusNormalize(data?.status || data?.Status || state.model.status);
-      let merged = full ? { ...state.model, ...data, status } : { ...state.model, ...data, status };
-      if (status === 'idle') {
-        const prevParams = state.model.params || state.model.Params;
-        const newParams = merged.params || merged.Params;
-        const prevRange = getRange(prevParams || {});
-        const newRange = getRange(newParams || {});
-        if (!newRange.valid && prevRange.valid) {
-          merged.params = prevParams;
-          merged.Params = prevParams;
-        }
-        if (state.rangeOverride) {
-          merged.params = merged.params || {};
-          merged.Params = merged.params;
-          merged.params.From = state.rangeOverride.from.toISOString().replace(/\.\d{3}Z$/, 'Z');
-          merged.params.To = state.rangeOverride.to.toISOString().replace(/\.\d{3}Z$/, 'Z');
-          merged.last_ts = state.model.last_ts || merged.last_ts;
-        } else if (!merged.last_ts && state.model.last_ts) {
-          merged.last_ts = state.model.last_ts;
-        }
+      const pending = data?.pending || data?.Pending || {};
+      state.model = { ...data, status, pending };
+      // Если нет активных params, но есть pending range — используем его для отображения.
+      const pendingRange = pending.range_set ? pending.range : pending.Range;
+      if (!state.model.params && !state.model.Params && pendingRange) {
+        state.model.params = pendingRange;
+        state.model.Params = pendingRange;
       }
-      state.model = merged;
+      logUI(`refresh result status=${status} last_ts=${state.model.last_ts || state.model.LastTS} pendingRange=${pendingRange ? 'yes' : 'no'}`);
       updateStatusView();
     }
 
     async function startJob() {
       const payload = validateStartForm();
       if (!payload) return;
+      logUI(`set range v2 ${JSON.stringify(payload)}`);
+      await requestJSON('POST', '/api/v2/job/range', payload);
+      logUI('startJob (v2) using pending');
       try {
-        await requestJSON('POST', '/api/v1/job', payload);
+        await requestJSON('POST', '/api/v2/job/start', {});
         log('Старт отправлен');
         await refresh(true);
       } catch (err) {
@@ -674,13 +731,25 @@
       });
       els.timeline.addEventListener('change', onTimelineSeek);
       els.timeline.addEventListener('input', onTimelinePreview);
-      els.controls.stepBack.addEventListener('click', () => action('step назад', '/api/v1/job/step/backward', { apply: true }));
-      els.controls.stepFwd.addEventListener('click', () => action('step вперёд', '/api/v1/job/step/forward'));
-      els.controls.stop.addEventListener('click', () => action('stop', '/api/v1/job/stop'));
+      els.timeline.addEventListener('pointerdown', () => {
+        const params = state.model.params || state.model.Params || {};
+        const pending = state.model.pending || state.model.Pending || {};
+        const range = getEffectiveRange(params, pending);
+        if (!range.valid) return;
+        const v = Number(els.timeline.value) / 1000;
+        const ts = toRFC3339(new Date(range.from.getTime() + (range.to - range.from) * v));
+        if (ts) logUI(`timeline drag start ${ts}`);
+      });
+      els.controls.stepBack.addEventListener('click', () => action('step назад', '/api/v2/job/step/backward', { apply: true }));
+      els.controls.stepFwd.addEventListener('click', () => action('step вперёд', '/api/v2/job/step/forward'));
+      els.controls.stop.addEventListener('click', () => {
+        logUI('Stop button: clicked');
+        action('stop', '/api/v2/job/stop');
+      });
       els.controls.playPause.addEventListener('click', onPlayPause);
       els.controls.seekManual.addEventListener('click', () => {
         const ts = els.seekManualTs.value.trim();
-        action('seek', '/api/v1/job/seek', { ts, apply: false });
+        action('seek', '/api/v2/job/seek', { ts, apply: false });
       });
       els.clearLog.addEventListener('click', () => { els.log.innerHTML = ''; });
       if (els.rangeBtn) {
@@ -697,35 +766,58 @@
     async function onPlayPause() {
       const st = statusNormalize(state.model.status);
       if (st === 'running') {
-        await action('pause', '/api/v1/job/pause');
-      } else if (st === 'paused') {
-        await action('resume', '/api/v1/job/resume');
-      } else {
-        await startJob();
+        logUI('Play button: pausing');
+        await action('pause', '/api/v2/job/pause');
+        state.previewTs = null;
+        return;
       }
+      if (st === 'paused') {
+        logUI('Play button: resuming with seek');
+        const targetDate = currentTsFromServer();
+        const target = targetDate ? toRFC3339(targetDate) : (state.model.last_ts || inputs.from.value.trim());
+        if (target) {
+          await action('seek', '/api/v2/job/seek', { ts: target, apply: false });
+        }
+        state.previewTs = null;
+        await action('resume', '/api/v2/job/resume');
+        return;
+      }
+      logUI('Play button: starting job');
+      state.previewTs = null;
+      await startJob();
     }
 
     function onTimelinePreview() {
       const params = state.model.params || state.model.Params || {};
-      const from = parseISO(params.From || params.from);
-      const to = parseISO(params.To || params.to);
+      const pending = state.model.pending || state.model.Pending || {};
+      const rangeData = getEffectiveRange(params, pending);
+      const from = rangeData.from;
+      const to = rangeData.to;
       if (!from || !to || to <= from) return;
       const v = Number(els.timeline.value) / 1000;
-      const ts = new Date(from.getTime() + (to - from) * v);
-      els.currentLabel.textContent = `seek: ${ts.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+      const dt = new Date(from.getTime() + (to - from) * v);
+      const iso = toRFC3339(dt);
+      if (!iso) return;
+      state.previewTs = dt;
+      els.currentLabel.textContent = iso;
     }
 
     async function onTimelineSeek() {
       const params = state.model.params || state.model.Params || {};
-      const from = parseISO(params.From || params.from);
-      const to = parseISO(params.To || params.to);
+      const pending = state.model.pending || state.model.Pending || {};
+      const rangeData = getEffectiveRange(params, pending);
+      const from = rangeData.from;
+      const to = rangeData.to;
       if (!from || !to || to <= from) return;
       const v = Number(els.timeline.value) / 1000;
-      const ts = new Date(from.getTime() + (to - from) * v).toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const ts = toRFC3339(new Date(from.getTime() + (to - from) * v));
+      state.previewTs = parseISO(ts);
+      logUI(`timeline seek ${ts}`);
       await seekOrPreview(ts);
     }
 
     async function action(label, url, body, refreshFull = true) {
+      logUI(`action ${label} ${url} ${body ? JSON.stringify(body) : ''}`);
       try {
         await requestJSON('POST', url, body);
         log(`${label}: ok`);
@@ -763,11 +855,15 @@
       const from = new Date(now.getTime() - mins * 60 * 1000);
       els.inputs.from.value = toRFC3339(from);
       els.inputs.to.value = toRFC3339(now);
+      state.previewTs = null;
     }
 
     async function jumpToEdge(where) {
       const params = state.model.params || state.model.Params || {};
-      const range = getRange(params);
+      const pending = state.model.pending || state.model.Pending || {};
+      const range = getEffectiveRange(params, pending);
+      const st = statusNormalize(state.model.status);
+      logUI(`jump button ${where} click status=${st} rangeValid=${range.valid}`);
       if (!range.valid) {
         log('Нет диапазона для перемещения', false);
         return;
@@ -778,20 +874,12 @@
     }
 
     async function seekOrPreview(ts) {
-      const st = statusNormalize(state.model.status);
       const params = state.model.params || state.model.Params || {};
-      const range = getRange(params);
+      const pending = state.model.pending || state.model.Pending || {};
+      const range = getEffectiveRange(params, pending);
       if (!range.valid) return;
-      if (st === 'running' || st === 'paused' || st === 'stopping') {
-        await action('seek', '/api/v1/job/seek', { ts, apply: false });
-        return;
-      }
-      // Нет активной задачи — просто двигаем курсор и запоминаем стартовую точку.
-      state.model.last_ts = ts;
-      state.rangeOverride = { from: range.from, to: range.to };
-      els.inputs.from.value = ts;
-      updateStatusView();
-      log(`Стартовая точка: ${ts}`);
+      logUI(`seekOrPreview request ts=${ts}`);
+      await action('seek', '/api/v2/job/seek', { ts, apply: false });
     }
 
     function toRFC3339(d) {
@@ -828,7 +916,9 @@
 
     async function applyAvailableRange() {
       try {
-        const data = await requestJSON('GET', '/api/v1/range');
+        logUI('range button clicked');
+        const data = await requestJSON('GET', '/api/v2/job/range');
+        logUI('Диапазон получен через v2');
         if (!data || !data.from || !data.to) {
           log('Диапазон: нет данных', false);
           return;
@@ -836,16 +926,11 @@
         els.inputs.from.value = data.from;
         els.inputs.to.value = data.to;
         log(`Диапазон установлен: ${data.from} → ${data.to}`);
-        // Обновляем локальную модель диапазона и ставим текущее в начало.
-        state.model.params = state.model.params || {};
-        state.model.params.From = data.from;
-        state.model.params.To = data.to;
-        state.model.last_ts = data.from;
-        state.rangeOverride = {
-          from: parseISO(data.from),
-          to: parseISO(data.to),
-        };
-        updateStatusView();
+        const payload = validateStartForm();
+        if (payload) {
+          await requestJSON('POST', '/api/v2/job/range', payload);
+        }
+        await refresh(true);
       } catch (err) {
         log(`Диапазон: ${err.message}`, false);
       }

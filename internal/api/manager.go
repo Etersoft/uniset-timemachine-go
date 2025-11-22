@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -23,12 +24,20 @@ type Manager struct {
 	jobCancel  context.CancelFunc
 	streamer   *StateStreamer
 	sensorInfo map[int64]SensorInfo
+	pending    pendingState
 }
 
 type defaults struct {
 	speed     float64
 	window    time.Duration
 	batchSize int
+}
+
+type pendingState struct {
+	rangeSet bool
+	rng      replay.Params
+	seekSet  bool
+	seekTs   time.Time
 }
 
 type job struct {
@@ -59,12 +68,62 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 	}
 }
 
+// StartPending запускает задачу, используя отложенный диапазон.
+func (m *Manager) StartPending(ctx context.Context) error {
+	m.mu.Lock()
+	hasRange := m.pending.rangeSet
+	rng := m.pending.rng
+	seekSet := m.pending.seekSet
+	seekTs := m.pending.seekTs
+	m.mu.Unlock()
+	if !hasRange {
+		return fmt.Errorf("pending range is not set")
+	}
+	if err := m.Start(ctx, rng.From, rng.To, rng.Step, rng.Speed, rng.Window); err != nil {
+		return err
+	}
+	if seekSet {
+		if err := m.Seek(seekTs, false); err != nil {
+			log.Printf("[manager] pending seek apply failed: %v", err)
+		} else {
+			// После отложенного seek остаёмся в paused внутри сервиса; нужно возобновить.
+			if err := m.Resume(); err != nil {
+				log.Printf("[manager] pending seek resume failed: %v", err)
+			}
+		}
+	}
+	return nil
+}
+
+// SetRange сохраняет диапазон/параметры без старта.
+func (m *Manager) SetRange(from, to time.Time, step time.Duration, speed float64, window time.Duration) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pending.rangeSet = true
+	m.pending.rng = replay.Params{
+		Sensors:   append([]int64(nil), m.sensors...),
+		From:      from,
+		To:        to,
+		Step:      step,
+		Speed:     speed,
+		Window:    window,
+		BatchSize: m.defaults.batchSize,
+	}
+}
+
+// SetPendingSeek запоминает желаемый seek.
+func (m *Manager) SetPendingSeek(ts time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pending.seekSet = true
+	m.pending.seekTs = ts
+}
+
 // Start запускает новую задачу. Разрешён только один одновременный запуск.
 func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duration, speed float64, window time.Duration) error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if m.job != nil && (m.job.status == "running" || m.job.status == "paused" || m.job.status == "stopping") {
+		m.mu.Unlock()
 		return fmt.Errorf("job is already active")
 	}
 
@@ -106,11 +165,15 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 		commands:  ctrlCh,
 	}
 	m.job = j
+	// очищаем pending после старта
+	m.pending = pendingState{}
+	m.mu.Unlock()
 
 	go func() {
 		err := m.service.RunWithControl(jobCtx, params, replay.Control{
 			Commands: ctrlCh,
 			OnStep: func(info replay.StepInfo) {
+				log.Printf("[event] step=%d ts=%s updates=%d", info.StepID, info.StepTs.Format(time.RFC3339), info.UpdatesCount)
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				if m.job == nil {
@@ -142,6 +205,7 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 				m.job.err = nil
 			}
 		}
+		log.Printf("[manager] RunWithControl finished err=%v", err)
 	}()
 	return nil
 }
@@ -167,13 +231,32 @@ func (m *Manager) Resume() error {
 // Stop останавливает задачу.
 func (m *Manager) Stop() error {
 	m.mu.Lock()
-	if m.job == nil || (m.job.status != "running" && m.job.status != "paused") {
+	if m.job == nil {
 		m.mu.Unlock()
-		return fmt.Errorf("no active job")
+		return nil
+	}
+	// Если уже остановились, просто выходим без ошибок.
+	if m.job.status == "done" || m.job.status == "failed" {
+		m.mu.Unlock()
+		return nil
+	}
+	// Если уже в процессе остановки и работа фактически завершена, переводим в done.
+	if m.job.status == "stopping" {
+		if !m.job.finishedAt.IsZero() {
+			m.job.status = "done"
+		}
+		m.mu.Unlock()
+		return nil
 	}
 	m.job.status = "stopping"
 	m.mu.Unlock()
-	return m.sendCommand(replay.Command{Type: replay.CommandStop})
+	if err := m.sendCommand(replay.Command{Type: replay.CommandStop}); err != nil {
+		if errors.Is(err, replay.ErrStopped{}) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // StepForward выполняет один шаг вперёд из паузы.
@@ -195,7 +278,16 @@ func (m *Manager) Seek(ts time.Time, apply bool) error {
 	if err := m.sendCommand(replay.Command{Type: replay.CommandSeek, TS: ts, Apply: apply}); err != nil {
 		return err
 	}
-	m.setStatus("paused")
+	m.mu.Lock()
+	prevStatus := ""
+	if m.job != nil {
+		m.job.lastTs = ts
+		prevStatus = m.job.status
+	}
+	m.mu.Unlock()
+	if prevStatus != "running" {
+		m.setStatus("paused")
+	}
 	return nil
 }
 
@@ -207,7 +299,12 @@ func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.job == nil {
-		return Status{Status: "idle"}
+		pending := m.pendingStateLocked()
+		st := "idle"
+		if pending.RangeSet {
+			st = "pending"
+		}
+		return Status{Status: st, Pending: pending}
 	}
 	st := Status{
 		Status:      m.job.status,
@@ -217,6 +314,7 @@ func (m *Manager) Status() Status {
 		StepID:      m.job.stepID,
 		LastTS:      m.job.lastTs,
 		UpdatesSent: m.job.updatesSent,
+		Pending:     m.pendingStateLocked(),
 	}
 	if m.job.err != nil {
 		st.Error = m.job.err.Error()
@@ -236,6 +334,15 @@ func (m *Manager) State() StateMeta {
 		LastTS:      m.job.lastTs,
 		UpdatesSent: m.job.updatesSent,
 		Status:      m.job.status,
+	}
+}
+
+func (m *Manager) pendingStateLocked() Pending {
+	return Pending{
+		RangeSet: m.pending.rangeSet,
+		Range:    m.pending.rng,
+		SeekSet:  m.pending.seekSet,
+		SeekTS:   m.pending.seekTs,
 	}
 }
 
@@ -265,6 +372,7 @@ type Status struct {
 	LastTS      time.Time     `json:"last_ts"`
 	UpdatesSent int64         `json:"updates_sent"`
 	Error       string        `json:"error,omitempty"`
+	Pending     Pending       `json:"pending,omitempty"`
 }
 
 type StateMeta struct {
@@ -272,6 +380,14 @@ type StateMeta struct {
 	StepID      int64     `json:"step_id"`
 	LastTS      time.Time `json:"last_ts"`
 	UpdatesSent int64     `json:"updates_sent"`
+}
+
+// Pending описывает отложенные параметры диапазона/seek.
+type Pending struct {
+	RangeSet bool          `json:"range_set"`
+	Range    replay.Params `json:"range"`
+	SeekSet  bool          `json:"seek_set"`
+	SeekTS   time.Time     `json:"seek_ts"`
 }
 
 func (m *Manager) sendCommand(cmd replay.Command) error {
@@ -290,6 +406,11 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 	}
 	resp := make(chan error, 1)
 	cmd.Resp = resp
+	tsStr := ""
+	if !cmd.TS.IsZero() {
+		tsStr = cmd.TS.Format(time.RFC3339)
+	}
+	log.Printf("[command] send %v apply=%t ts=%s", cmd.Type, cmd.Apply, tsStr)
 	select {
 	case m.job.commands <- cmd:
 	default:
@@ -299,8 +420,10 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 	m.mu.Unlock()
 	select {
 	case err := <-resp:
+		log.Printf("[command] result %v err=%v", cmd.Type, err)
 		return err
 	case <-time.After(30 * time.Second):
+		log.Printf("[command] timeout %v", cmd.Type)
 		return fmt.Errorf("command timeout")
 	}
 }
@@ -311,4 +434,11 @@ func (m *Manager) setStatus(status string) {
 	if m.job != nil {
 		m.job.status = status
 	}
+}
+
+// PendingState возвращает копию отложенных параметров.
+func (m *Manager) PendingState() Pending {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.pendingStateLocked()
 }

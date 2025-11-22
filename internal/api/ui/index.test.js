@@ -44,7 +44,13 @@
   };
 
   const click = (el) => {
+    if (!el) throw new Error('UI TEST FAILED: element is missing');
     el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  };
+
+  const waitForRangeButton = async () => {
+    if (!controls.rangeBtn) throw new Error('UI TEST FAILED: range button missing');
+    await waitFor(() => !controls.rangeBtn.disabled, 8000);
   };
 
   const ensureIdle = async () => {
@@ -78,11 +84,8 @@
   const run = async () => {
     try {
       log('Starting UI smoke test');
-      if (controls.rangeBtn) {
-        click(controls.rangeBtn);
-      } else {
-        log('range button missing');
-      }
+      await waitForRangeButton();
+      click(controls.rangeBtn);
       await waitFor(() => inputs.from.value !== '' && inputs.to.value !== '', 2000);
       setRange(inputs.from.value, inputs.to.value);
       await sleep(500);
@@ -93,12 +96,17 @@
       controls.timeline.dispatchEvent(new Event('change'));
       await sleep(200);
       await waitFor(() => document.getElementById('currentLabel').textContent !== '-', 2000);
+      const manual = document.getElementById('currentLabel').textContent;
+      log(`Manual selection: ${manual}`);
       log('Starting playback');
       click(controls.playPause);
       await waitStatus('running');
+      await waitFor(() => document.getElementById('statTs').textContent === manual, 6000);
+      log(`Playback started from ${document.getElementById('statTs').textContent}`);
       log('Pausing');
       click(controls.playPause);
       await waitStatus('paused');
+      log(`Current label after pause: ${document.getElementById('currentLabel').textContent}`);
       log('Step forward/backward');
       clickIfActive(controls.stepFwd, 'Step forward');
       await sleep(200);

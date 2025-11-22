@@ -179,21 +179,118 @@ func TestRangeEndpoint(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()
 
-	resp, err := http.Get(ts.URL + "/api/v1/range")
-	if err != nil {
-		t.Fatalf("get /range: %v", err)
+	check := func(path string) {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("range %s status = %d, want 200", path, resp.StatusCode)
+		}
+		var body map[string]string
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode %s: %v", path, err)
+		}
+		if body["from"] == "" || body["to"] == "" {
+			t.Fatalf("%s response empty: %#v", path, body)
+		}
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("range status = %d, want 200", resp.StatusCode)
+
+	check("/api/v1/range")
+	check("/api/v2/job/range")
+}
+
+func TestJobV2PendingFlow(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	from := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
+	to := from.Add(6 * time.Second)
+	rangeBody := map[string]any{
+		"from":  from.Format(time.RFC3339),
+		"to":    to.Format(time.RFC3339),
+		"step":  "1s",
+		"speed": 1.0,
 	}
-	var body map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-		t.Fatalf("decode range: %v", err)
+	seekTs := from.Add(2 * time.Second).Format(time.RFC3339)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/range", rangeBody); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 range status = %d, want 200", resp.StatusCode)
 	}
-	if body["from"] == "" || body["to"] == "" {
-		t.Fatalf("range response empty: %#v", body)
+	if resp := postJSON(t, ts.URL+"/api/v2/job/seek", map[string]any{"ts": seekTs, "apply": false}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 seek status = %d, want 200", resp.StatusCode)
 	}
+
+	var st struct {
+		Status  string         `json:"status"`
+		Pending map[string]any `json:"pending"`
+	}
+	getJSON(t, ts.URL+"/api/v2/job", &st)
+	if st.Status != "pending" {
+		t.Fatalf("status after pending = %s, want pending", st.Status)
+	}
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 start status = %d, want 200", resp.StatusCode)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	getJSON(t, ts.URL+"/api/v2/job", &st)
+	if st.Status != "running" && st.Status != "done" && st.Status != "paused" {
+		t.Fatalf("status after start = %s, want running/paused/done", st.Status)
+	}
+}
+
+func TestV2CommandsLifecycle(t *testing.T) {
+	ts, mgr := newTestServer(t)
+	defer ts.Close()
+
+	from := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
+	to := from.Add(10 * time.Second)
+	rangeBody := map[string]any{
+		"from":  from.Format(time.RFC3339),
+		"to":    to.Format(time.RFC3339),
+		"step":  "1s",
+		"speed": 5.0,
+	}
+	seekTs := from.Add(2 * time.Second)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/range", rangeBody); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 range status = %d, want 200", resp.StatusCode)
+	}
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 start status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"running"}, 2*time.Second)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/pause", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 pause status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"paused"}, 2*time.Second)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/step/backward", map[string]any{"apply": true}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 step backward status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"paused"}, 2*time.Second)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/seek", map[string]any{"ts": seekTs.Format(time.RFC3339), "apply": false}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 seek status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"paused"}, 2*time.Second)
+	if got := mgr.Status().LastTS; got.IsZero() || got.Sub(seekTs) < -time.Second || got.Sub(seekTs) > time.Second {
+		t.Fatalf("LastTS after seek = %s, want around %s", got, seekTs)
+	}
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/resume", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 resume status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"running"}, 2*time.Second)
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/stop", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 stop status = %d, want 200", resp.StatusCode)
+	}
+	waitStatus(t, mgr, []string{"done", "failed"}, 3*time.Second)
 }
 
 func postJSON(t *testing.T, url string, body map[string]any) *http.Response {
@@ -209,4 +306,38 @@ func postJSON(t *testing.T, url string, body map[string]any) *http.Response {
 		t.Fatalf("post %s: %v", url, err)
 	}
 	return resp
+}
+
+func getJSON(t *testing.T, url string, out interface{}) {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("get %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("get %s status = %d, want 200", url, resp.StatusCode)
+	}
+	if out != nil {
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatalf("decode %s: %v", url, err)
+		}
+	}
+}
+
+func waitStatus(t *testing.T, mgr *Manager, want []string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	wantSet := make(map[string]struct{}, len(want))
+	for _, s := range want {
+		wantSet[s] = struct{}{}
+	}
+	for time.Now().Before(deadline) {
+		st := mgr.Status().Status
+		if _, ok := wantSet[st]; ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("status did not reach %v within %s, last=%s", want, timeout, mgr.Status().Status)
 }

@@ -3,6 +3,7 @@ package replay
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
@@ -374,6 +375,11 @@ func handleCommands(
 	for {
 		select {
 		case cmd := <-ctrl.Commands:
+			cmdTS := ""
+			if !cmd.TS.IsZero() {
+				cmdTS = cmd.TS.Format(time.RFC3339)
+			}
+			log.Printf("[replay] handling %v apply=%t ts=%s paused=%v", cmd.Type, cmd.Apply, cmdTS, *paused)
 			var respErr error
 			switch cmd.Type {
 			case CommandPause:

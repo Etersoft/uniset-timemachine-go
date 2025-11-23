@@ -204,6 +204,17 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 				m.job.status = "done"
 				m.job.err = nil
 			}
+			// Сохраняем pending диапазон/seek для последующих шагов в idle/done.
+			if m.pending.rangeSet == false {
+				m.pending.rangeSet = true
+				m.pending.rng = m.job.params
+			}
+			if m.job.lastTs.IsZero() {
+				m.pending.seekTs = m.job.params.To
+			} else {
+				m.pending.seekTs = m.job.lastTs
+			}
+			m.pending.seekSet = true
 		}
 		log.Printf("[manager] RunWithControl finished err=%v", err)
 	}()
@@ -235,6 +246,13 @@ func (m *Manager) Stop() error {
 		m.mu.Unlock()
 		return nil
 	}
+	// Сохраняем текущий диапазон и позицию, чтобы при следующем старте продолжить с последнего места.
+	m.pending.rangeSet = true
+	m.pending.rng = m.job.params
+	if !m.job.lastTs.IsZero() {
+		m.pending.seekSet = true
+		m.pending.seekTs = m.job.lastTs
+	}
 	// Если уже остановились, просто выходим без ошибок.
 	if m.job.status == "done" || m.job.status == "failed" {
 		m.mu.Unlock()
@@ -261,6 +279,9 @@ func (m *Manager) Stop() error {
 
 // StepForward выполняет один шаг вперёд из паузы.
 func (m *Manager) StepForward() error {
+	if handled := m.stepPendingWithoutJob(true); handled {
+		return nil
+	}
 	if err := m.sendCommand(replay.Command{Type: replay.CommandStepForward}); err != nil {
 		return err
 	}
@@ -271,6 +292,9 @@ func (m *Manager) StepForward() error {
 
 // StepBackward выполняет один шаг назад из паузы (без промежуточных отправок).
 func (m *Manager) StepBackward(apply bool) error {
+	if handled := m.stepPendingWithoutJob(false); handled {
+		return nil
+	}
 	if err := m.sendCommand(replay.Command{Type: replay.CommandStepBackward, Apply: apply}); err != nil {
 		return err
 	}
@@ -363,6 +387,47 @@ func (m *Manager) Snapshot(ctx context.Context, ts time.Time) (replay.StateSnaps
 	return replay.BuildState(ctx, m.service.Storage, params, ts)
 }
 
+// stepPendingWithoutJob двигает pending.seekTs, если задачи нет (idle/done) и задан диапазон.
+func (m *Manager) stepPendingWithoutJob(forward bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.stepPendingLocked(forward)
+}
+
+// stepPendingLocked двигает pending.seekTs, ожидая, что m.mu уже удержан.
+func (m *Manager) stepPendingLocked(forward bool) bool {
+	if m.job != nil && m.job.status != "done" && m.job.status != "failed" {
+		return false
+	}
+	if !m.pending.rangeSet {
+		return false
+	}
+	step := m.pending.rng.Step
+	if step == 0 {
+		step = time.Second
+	}
+	cur := m.pending.seekTs
+	if cur.IsZero() {
+		cur = m.pending.rng.From
+	}
+	var next time.Time
+	if forward {
+		next = cur.Add(step)
+		if next.After(m.pending.rng.To) {
+			next = m.pending.rng.To
+		}
+	} else {
+		next = cur.Add(-step)
+		if next.Before(m.pending.rng.From) {
+			next = m.pending.rng.From
+		}
+	}
+	m.pending.seekSet = true
+	m.pending.seekTs = next
+	// статус оставляем как есть (обычно idle/done), чтобы UI видел pending seek.
+	return true
+}
+
 // Range возвращает минимальный/максимальный timestamp для текущего списка датчиков.
 func (m *Manager) Range(ctx context.Context) (time.Time, time.Time, error) {
 	return m.service.Storage.Range(ctx, m.sensors)
@@ -397,16 +462,23 @@ type Pending struct {
 
 func (m *Manager) sendCommand(cmd replay.Command) error {
 	m.mu.Lock()
-	if m.job == nil {
+	isStep := cmd.Type == replay.CommandStepForward || cmd.Type == replay.CommandStepBackward
+	if m.job == nil || m.job.status == "done" || m.job.status == "failed" || m.job.commands == nil {
+		if isStep {
+			forward := cmd.Type == replay.CommandStepForward
+			handled := m.stepPendingLocked(forward)
+			m.mu.Unlock()
+			if handled {
+				return nil
+			}
+		}
 		m.mu.Unlock()
-		return fmt.Errorf("no active job")
-	}
-	if m.job.status == "done" || m.job.status == "failed" {
-		m.mu.Unlock()
-		return fmt.Errorf("job is already finished")
-	}
-	if m.job.commands == nil {
-		m.mu.Unlock()
+		if m.job == nil {
+			return fmt.Errorf("no active job")
+		}
+		if m.job.status == "done" || m.job.status == "failed" {
+			return fmt.Errorf("job is already finished")
+		}
 		return fmt.Errorf("job is not controllable")
 	}
 	resp := make(chan error, 1)

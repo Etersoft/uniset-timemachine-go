@@ -32,7 +32,7 @@
     button:active:not(:disabled) { background: linear-gradient(135deg, #0284c7, #0ea5e9); box-shadow: 0 6px 18px rgba(14,165,233,0.28); }
     button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; background: #1b2535; color: #94a3b8; }
     .ghost { background: rgba(255,255,255,0.06); color: #e2e8f0; border: 1px solid #1f2937; }
-    .player button { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; border-radius: 10px; padding: 10px 14px; min-width: 74px; transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+    .player button { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; border-radius: 10px; padding: 0 10px; height: 42px; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 4px; font-size: 13px; transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
     .player button:hover:not(:disabled) { background: #16223a; border-color: #2f3f58; }
     .player button:disabled { opacity: 0.55; cursor: not-allowed; background: #0b1324; color: #94a3b8; }
     .play-btn { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; }
@@ -131,8 +131,14 @@
           <button class="tab" data-tab="table">Датчики</button>
           <button class="tab" data-tab="charts">Графики</button>
         </div>
+        <div class="player" style="display:flex; gap:8px; align-items:center; background:#0f172a; border:1px solid #1f2937; border-radius:14px; padding:6px 8px;">
+          <button id="stepBackBtn" class="ghost" aria-label="Шаг назад" title="Шаг назад" style="width:60px;">⏮</button>
+          <button id="playPauseBtn" class="play-btn" aria-label="Play/Pause" title="Play/Pause" style="width:88px;">▶️ Play</button>
+          <button id="stopBtn" class="ghost" aria-label="Stop" title="Stop" style="width:88px; font-size:15px;">■ Stop</button>
+          <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд" title="Шаг вперёд" style="width:60px;">⏭</button>
+        </div>
         <div class="chips" style="justify-content:flex-end; display:flex; gap:10px; flex-wrap:wrap;">
-          <span class="chip warn">polling 1.5s</span>
+          <span class="chip ok" id="pollingChip">polling 1.5s</span>
           <span class="chip">REST /api/v2/*</span>
         </div>
       </div>
@@ -202,13 +208,7 @@
     </div>
 
     <div class="card">
-      <div class="player">
-        <button id="stepBackBtn" class="ghost" aria-label="Шаг назад">⏮</button>
-        <button id="playPauseBtn" class="play-btn">▶️ Play</button>
-        <button id="stopBtn" class="ghost">■ Stop</button>
-        <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд">⏭</button>
-      </div>
-      <div class="row wrap" style="margin-top:10px; gap:12px; align-items:flex-end;">
+      <div class="row wrap" style="gap:12px; align-items:flex-end;">
         <div style="flex:1; min-width: 240px;">
           <label for="seekManualTs">Перейти к</label>
           <div class="input-with-btn">
@@ -1378,9 +1378,10 @@
       const curTs = currentTsFromServer();
       const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
       const atEnd = !range.valid || !curTs || curTs.getTime() >= range.to.getTime();
+      const canStep = range.valid && st !== 'failed' && st !== 'running' && st !== 'stopping';
 
-      setDisabled(els.controls.stepBack, st === 'failed' || !range.valid || !paused || atStart);
-      setDisabled(els.controls.stepFwd, st === 'failed' || !range.valid || !paused || atEnd);
+      setDisabled(els.controls.stepBack, !canStep || atStart);
+      setDisabled(els.controls.stepFwd, !canStep || atEnd);
       setDisabled(els.controls.stop, !active);
       setDisabled(els.controls.playPause, st === 'failed');
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';

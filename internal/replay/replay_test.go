@@ -286,7 +286,7 @@ func TestRunWithControlSeekApply(t *testing.T) {
 		})
 	}()
 
-respCh := make(chan error, 1)
+	respCh := make(chan error, 1)
 	cmdCh <- Command{Type: CommandSeek, TS: target, Apply: true, Resp: respCh}
 	select {
 	case err := <-respCh:
@@ -317,5 +317,68 @@ respCh := make(chan error, 1)
 	}
 	if len(snap.Updates) != 1 || snap.Updates[0].Value != 1 {
 		t.Fatalf("snapshot updates mismatch: %+v", snap.Updates)
+	}
+}
+
+func TestStateCacheFastForward(t *testing.T) {
+	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	sensors := []int64{1}
+
+	store := &controlStorage{
+		warmup: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start.Add(-time.Second), Value: 10},
+		},
+		events: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start, Value: 11},
+			{SensorID: 1, Timestamp: start.Add(time.Second), Value: 12},
+			{SensorID: 1, Timestamp: start.Add(2 * time.Second), Value: 13},
+			{SensorID: 1, Timestamp: start.Add(2500 * time.Millisecond), Value: 14},
+		},
+	}
+	client := &fakeClient{}
+	svc := Service{Storage: store, Output: client}
+
+	params := Params{
+		Sensors:   sensors,
+		From:      start,
+		To:        start.Add(5 * time.Second),
+		Step:      time.Second,
+		Window:    time.Second,
+		BatchSize: 10,
+	}
+
+	// Прогоняем один раз, чтобы убедиться в корректности warmup/stream.
+	if err := svc.Run(context.Background(), params); err != nil {
+		t.Fatalf("initial run failed: %v", err)
+	}
+
+	// Готовим кеш со снапшотом на 2s (stepID=3).
+	state := map[int64]*sensorState{
+		1: {value: 13, hasValue: true},
+	}
+	stepTs := start.Add(2 * time.Second)
+	stepID := int64(3)
+	cache := newStateCache(4)
+	cache.add(stepTs, stepID, state)
+
+	// Цель 3s должна взять кеш 2s и догнать до 3s, применив событие на 2.5s.
+	target := start.Add(3 * time.Second)
+	stateCopy := cloneState(state)
+	var streamCancel context.CancelFunc
+	eventCh := make(<-chan storage.SensorEvent)
+	streamErr := make(<-chan error)
+	pending := make([]storage.SensorEvent, 0, 16)
+
+	if err := restoreState(context.Background(), &svc, params, target, &stateCopy, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, cache); err != nil {
+		t.Fatalf("restoreState failed: %v", err)
+	}
+	if stepTs != target {
+		t.Fatalf("stepTs after restore = %s, want %s", stepTs, target)
+	}
+	if stepID != 4 {
+		t.Fatalf("stepID after restore = %d, want 4", stepID)
+	}
+	if val := stateCopy[1].value; val != 14 {
+		t.Fatalf("state value after restore = %v, want 14", val)
 	}
 }

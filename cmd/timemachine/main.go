@@ -41,6 +41,7 @@ type options struct {
 	batchSize     int
 	httpAddr      string
 	verbose       bool
+	logCache      bool
 	version       bool
 	showRange     bool
 }
@@ -100,8 +101,9 @@ func main() {
 
 	client := initOutputClient(opts, cfg)
 	service := replay.Service{
-		Storage: store,
-		Output:  client,
+		Storage:  store,
+		Output:   client,
+		LogCache: opts.logCache,
 	}
 
 	params := replay.Params{
@@ -140,6 +142,7 @@ func parseFlags() options {
 	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
 	flag.StringVar(&opt.httpAddr, "http-addr", "", "run HTTP control server on the given addr (e.g. :8080)")
 	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
+	flag.BoolVar(&opt.logCache, "log-cache", false, "log replay cache hits/misses")
 	flag.BoolVar(&opt.version, "version", false, "print version and exit")
 	flag.BoolVar(&opt.showRange, "show-range", false, "print available time range and exit")
 
@@ -349,8 +352,9 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 		log.Fatalf("serve mode requires --db storage")
 	}
 	service := replay.Service{
-		Storage: store,
-		Output:  initOutputClient(opt, cfg),
+		Storage:  store,
+		Output:   initOutputClient(opt, cfg),
+		LogCache: opt.logCache,
 	}
 	streamer := api.NewStateStreamer()
 	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer)
@@ -426,6 +430,12 @@ func yamlKeyToFlag(key string) string {
 		"output.sm-param-prefix": "sm-param-prefix",
 		"output.batch-size":      "batch-size",
 		"output.verbose":         "v",
+		"http-addr":              "http-addr",
+		"http.addr":              "http-addr",
+		"http.address":           "http-addr",
+		"server.http-addr":       "http-addr",
+		"server.addr":            "http-addr",
+		"logging.cache":          "log-cache",
 	}
 	if flagName, ok := mapped[key]; ok {
 		return flagName

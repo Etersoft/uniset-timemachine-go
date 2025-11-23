@@ -3,6 +3,7 @@ package sharedmem
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -161,6 +162,7 @@ func TestHTTPClientSendContextTimeout(t *testing.T) {
 	client := &HTTPClient{
 		BaseURL:  "http://example.com",
 		Supplier: "Timeout",
+		Timeout:  time.Millisecond * 2,
 		HTTP: &http.Client{
 			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 				<-req.Context().Done()
@@ -176,5 +178,96 @@ func TestHTTPClientSendContextTimeout(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded error, got %v", err)
+	}
+}
+
+func TestHTTPClientRetry(t *testing.T) {
+	var calls int
+	client := &HTTPClient{
+		BaseURL: "http://example.com",
+		Retry:   1,
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return nil, fmt.Errorf("temporary")
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     http.StatusText(http.StatusOK),
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		},
+	}
+	err := client.Send(context.Background(), StepPayload{
+		Updates: []SensorUpdate{{ID: 1, Value: 1}},
+	})
+	if err != nil {
+		t.Fatalf("expected retry success, got %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected 2 attempts, got %d", calls)
+	}
+}
+
+func TestHTTPClientWorkerQueue(t *testing.T) {
+	reqCh := make(chan *http.Request, 2)
+	releaseCh := make(chan struct{})
+	client := &HTTPClient{
+		BaseURL:     "http://example.com",
+		WorkerCount: 1,
+		QueueSize:   2,
+		HTTP: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				reqCh <- req
+				<-releaseCh
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Status:     http.StatusText(http.StatusOK),
+					Body:       io.NopCloser(strings.NewReader("ok")),
+					Header:     make(http.Header),
+					Request:    req,
+				}, nil
+			}),
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 2)
+	go func() {
+		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{ID: 1, Value: 1}}})
+	}()
+	go func() {
+		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{ID: 2, Value: 2}}})
+	}()
+
+	// ждём первый запрос и отпускаем транспорт, чтобы воркер взял второй
+	select {
+	case <-reqCh:
+	case <-time.After(time.Second):
+		t.Fatalf("request 1 not received")
+	}
+	releaseCh <- struct{}{}
+	select {
+	case <-reqCh:
+	case <-time.After(time.Second):
+		t.Fatalf("request 2 not received")
+	}
+	releaseCh <- struct{}{}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("Send %d error: %v", i+1, err)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Send %d timeout", i+1)
+		}
 	}
 }

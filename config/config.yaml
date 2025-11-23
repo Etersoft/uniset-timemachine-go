@@ -6,6 +6,12 @@ database:
   window: 2s
   speed: 400
 
+http:
+  addr: :8080
+
+logging:
+  cache: false
+
 sensors:
   config: config/test.xml
   selector: "Sensor?????_S"

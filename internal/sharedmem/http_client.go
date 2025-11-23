@@ -20,10 +20,23 @@ type HTTPClient struct {
 	HTTP           *http.Client
 	Logger         *log.Logger
 	ParamFormatter ParamFormatter
+	Timeout        time.Duration
+	Retry          int
+	WorkerCount    int
+	QueueSize      int
 
 	mu            sync.Mutex
 	totalDuration time.Duration
 	totalCalls    int64
+
+	startWorkers sync.Once
+	queue        chan workItem
+}
+
+type workItem struct {
+	ctx     context.Context
+	updates []SensorUpdate
+	resp    chan error
 }
 
 // Send переводит StepPayload в запрос /set.
@@ -31,7 +44,54 @@ func (c *HTTPClient) Send(ctx context.Context, payload StepPayload) error {
 	if len(payload.Updates) == 0 {
 		return nil
 	}
+	if c.WorkerCount > 0 {
+		return c.enqueue(ctx, payload.Updates)
+	}
 	return c.set(ctx, payload.Updates)
+}
+
+func (c *HTTPClient) enqueue(ctx context.Context, updates []SensorUpdate) error {
+	c.startWorkers.Do(func() {
+		size := c.QueueSize
+		if size <= 0 {
+			size = c.WorkerCount * 4
+		}
+		if size <= 0 {
+			size = 8
+		}
+		c.queue = make(chan workItem, size)
+		for i := 0; i < c.WorkerCount; i++ {
+			go c.worker()
+		}
+	})
+	item := workItem{
+		ctx:     ctx,
+		updates: updates,
+		resp:    make(chan error, 1),
+	}
+	select {
+	case c.queue <- item:
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return fmt.Errorf("http client: worker queue is full")
+	}
+	select {
+	case err := <-item.resp:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (c *HTTPClient) worker() {
+	for item := range c.queue {
+		err := c.set(item.ctx, item.updates)
+		select {
+		case item.resp <- err:
+		default:
+		}
+	}
 }
 
 func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate) error {
@@ -54,43 +114,7 @@ func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+rawQuery, nil)
-	if err != nil {
-		return fmt.Errorf("http client: new request: %w", err)
-	}
-	start := time.Now()
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		if c.Logger != nil {
-			c.Logger.Printf("SM error: %v (elapsed %s)", err, time.Since(start))
-		}
-		return fmt.Errorf("http client: do request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	elapsed := time.Since(start)
-	var avg time.Duration
-	if c.Logger != nil {
-		c.mu.Lock()
-		c.totalDuration += elapsed
-		c.totalCalls++
-		if c.totalCalls > 0 {
-			avg = time.Duration(int64(c.totalDuration) / c.totalCalls)
-		}
-		c.Logger.Printf("SM /set %s -> %s (%s, avg %s over %d calls)",
-			req.URL.String(), resp.Status, elapsed, avg, c.totalCalls)
-		c.mu.Unlock()
-	}
-
-	if resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		if c.Logger != nil {
-			c.Logger.Printf("SM error body: %s", strings.TrimSpace(string(body)))
-		}
-		return fmt.Errorf("http client: /set failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(body)))
-	}
-	io.Copy(io.Discard, resp.Body)
-	return nil
+	return c.sendWithRetry(ctx, httpClient, endpoint, rawQuery)
 }
 
 func buildSetQuery(supplier string, updates []SensorUpdate, formatter ParamFormatter) (string, error) {
@@ -141,4 +165,79 @@ func joinURL(base, path string) (string, error) {
 		return "", fmt.Errorf("http client: join path: %w", err)
 	}
 	return joined, nil
+}
+
+func (c *HTTPClient) sendWithRetry(ctx context.Context, httpClient *http.Client, endpoint, rawQuery string) error {
+	attempts := c.Retry + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	var lastErr error
+	for i := 0; i < attempts; i++ {
+		reqCtx := ctx
+		var cancel context.CancelFunc
+		if c.Timeout > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, c.Timeout)
+		}
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, endpoint+rawQuery, nil)
+		if err != nil {
+			if cancel != nil {
+				cancel()
+			}
+			return fmt.Errorf("http client: new request: %w", err)
+		}
+		start := time.Now()
+		resp, err := httpClient.Do(req)
+		if cancel != nil {
+			defer cancel()
+		}
+		if err != nil {
+			lastErr = fmt.Errorf("http client: do request: %w", err)
+			if c.Logger != nil {
+				c.Logger.Printf("SM error attempt=%d: %v (elapsed %s)", i+1, err, time.Since(start))
+			}
+			time.Sleep(backoffDelay(i))
+			continue
+		}
+		defer resp.Body.Close()
+
+		elapsed := time.Since(start)
+		var avg time.Duration
+		if c.Logger != nil {
+			c.mu.Lock()
+			c.totalDuration += elapsed
+			c.totalCalls++
+			if c.totalCalls > 0 {
+				avg = time.Duration(int64(c.totalDuration) / c.totalCalls)
+			}
+			c.Logger.Printf("SM /set %s -> %s (%s, avg %s over %d calls)",
+				req.URL.String(), resp.Status, elapsed, avg, c.totalCalls)
+			c.mu.Unlock()
+		}
+
+		if resp.StatusCode >= 300 {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			if c.Logger != nil {
+				c.Logger.Printf("SM error body: %s", strings.TrimSpace(string(body)))
+			}
+			lastErr = fmt.Errorf("http client: /set failed: status=%s body=%s", resp.Status, strings.TrimSpace(string(body)))
+			time.Sleep(backoffDelay(i))
+			continue
+		}
+		io.Copy(io.Discard, resp.Body)
+		return nil
+	}
+	return lastErr
+}
+
+func backoffDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		return 0
+	}
+	// простой линейный backoff до 200мс
+	delay := time.Duration(attempt) * 50 * time.Millisecond
+	if delay > 200*time.Millisecond {
+		return 200 * time.Millisecond
+	}
+	return delay
 }

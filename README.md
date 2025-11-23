@@ -36,6 +36,16 @@ go run ./cmd/timemachine --http-addr :8080 --db ... --confile config/test.xml --
 
 Далее управляйте через HTTP (start/pause/resume/step/seek/apply/snapshot, status/state). Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 
+Пример YAML для serve-режима (см. `config/config.yaml`) включает адрес HTTP-сервера:
+
+```yaml
+http:
+  addr: :8080
+logging:
+  cache: false
+```
+Этот блок маппится на флаг `--http-addr` при запуске с `--config-yaml config/config.yaml`.
+
 ### YAML с параметрами по умолчанию
 
 Чтобы не передавать длинный список флагов каждый раз, создайте структурированный YAML (например, `config/config.yaml`):

@@ -23,8 +23,9 @@ type Params struct {
 
 // Service связывает storage и sharedmem.
 type Service struct {
-	Storage storage.Storage
-	Output  sharedmem.Client
+	Storage  storage.Storage
+	Output   sharedmem.Client
+	LogCache bool
 }
 
 // Run запускает цикл воспроизведения.
@@ -221,6 +222,18 @@ func (c *stateCache) get(ts time.Time) (cacheEntry, bool) {
 	}
 	for i := len(c.entries) - 1; i >= 0; i-- {
 		if c.entries[i].ts.Equal(ts) {
+			return c.entries[i], true
+		}
+	}
+	return cacheEntry{}, false
+}
+
+func (c *stateCache) getLE(ts time.Time) (cacheEntry, bool) {
+	if c == nil {
+		return cacheEntry{}, false
+	}
+	for i := len(c.entries) - 1; i >= 0; i-- {
+		if !c.entries[i].ts.After(ts) {
 			return c.entries[i], true
 		}
 	}
@@ -555,6 +568,68 @@ func rebuildState(
 	return nil
 }
 
+func fastForwardFromCache(
+	ctx context.Context,
+	s *Service,
+	params Params,
+	target time.Time,
+	state *map[int64]*sensorState,
+	stepTs *time.Time,
+	stepID *int64,
+) error {
+	if target.Before(*stepTs) {
+		return fmt.Errorf("target %s is before cached state %s", target, *stepTs)
+	}
+	if target.Equal(*stepTs) {
+		return nil
+	}
+
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	fromTs := stepTs.Add(time.Nanosecond)
+	dataCh, errCh := s.Storage.Stream(streamCtx, storage.StreamRequest{
+		Sensors: params.Sensors,
+		From:    fromTs,
+		To:      target,
+		Window:  params.Window,
+	})
+	eventCh, streamErr := fanInEvents(streamCtx, dataCh, errCh)
+
+	pending := make([]storage.SensorEvent, 0, 128)
+	// Собираем все события до закрытия канала, чтобы гарантированно применить их при перемотке.
+	closed := false
+	for !closed {
+		pending, closed = drainEvents(eventCh, pending)
+		if closed || len(pending) > 0 {
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	curTs := *stepTs
+
+	for curTs.Before(target) {
+		curTs = curTs.Add(params.Step)
+		pending = applyPending(*state, pending, curTs)
+	}
+
+	select {
+	case err := <-streamErr:
+		if err != nil {
+			return err
+		}
+	default:
+	}
+
+	*stepTs = curTs
+	*stepID = int64(curTs.Sub(params.From)/params.Step) + 1
+	return nil
+}
+
 func snapshotToState(ids []int64, values map[int64]float64) map[int64]*sensorState {
 	newState := make(map[int64]*sensorState, len(ids))
 	for _, id := range ids {
@@ -627,10 +702,27 @@ func restoreState(
 	cache *stateCache,
 ) error {
 	if entry, ok := cache.get(target); ok {
+		if s != nil && s.LogCache {
+			log.Printf("[replay] cache hit exact ts=%s step=%d", entry.ts.Format(time.RFC3339), entry.stepID)
+		}
 		*state = cloneState(entry.state)
 		*stepTs = entry.ts
 		*stepID = entry.stepID
+	} else if entry, ok := cache.getLE(target); ok {
+		if s != nil && s.LogCache {
+			log.Printf("[replay] cache hit le ts=%s step=%d target=%s", entry.ts.Format(time.RFC3339), entry.stepID, target.Format(time.RFC3339))
+		}
+		*state = cloneState(entry.state)
+		*stepTs = entry.ts
+		*stepID = entry.stepID
+		if err := fastForwardFromCache(ctx, s, params, target, state, stepTs, stepID); err != nil {
+			return err
+		}
+		cache.add(*stepTs, *stepID, *state)
 	} else {
+		if s != nil && s.LogCache {
+			log.Printf("[replay] cache miss, rebuild target=%s", target.Format(time.RFC3339))
+		}
 		if err := rebuildState(ctx, s, params, target, state); err != nil {
 			return err
 		}

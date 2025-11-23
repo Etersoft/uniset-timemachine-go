@@ -81,6 +81,34 @@
     }
   };
 
+  const waitStatusIn = async (targets, timeout = 10000) => {
+    const targetSet = new Set(targets.map(statusNormalize));
+    const normalized = (s) => statusNormalize(s);
+    log(`Waiting for statuses ${targets.join(', ')}...`);
+    try {
+      await waitFor(() => targetSet.has(normalized(document.getElementById('statusBadge').textContent)), timeout);
+    } catch (err) {
+      console.warn(`[UI TEST] Status ${Array.from(targetSet)} wait timed out, current=${document.getElementById('statusBadge').textContent}`);
+    }
+  };
+
+  const seekFraction = async (fraction) => {
+    const value = Math.max(0, Math.min(1, fraction)) * 1000;
+    controls.timeline.value = Math.round(value);
+    controls.timeline.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(50);
+    controls.timeline.dispatchEvent(new Event('change', { bubbles: true }));
+    await sleep(150);
+  };
+
+  const ensureStopped = async () => {
+    const st = currentStatus();
+    if (st === 'running' || st === 'paused' || st === 'stopping') {
+      clickIfActive(controls.stop, 'Stop');
+      await waitStatusIn(['done', 'idle'], 5000);
+    }
+  };
+
   const run = async () => {
     try {
       log('Starting UI smoke test');
@@ -127,17 +155,62 @@
     }
   };
 
+  const runFlow = async () => {
+    try {
+      log('Starting UI flow test (range → seek → start → pause → seek → resume → stop)');
+      await ensureStopped();
+      await waitForRangeButton();
+      click(controls.rangeBtn);
+      await waitStatusIn(['pending', 'paused', 'idle'], 8000);
+
+      // Готовим параметры: чуть замедлить, чтобы успеть поставить паузу.
+      inputs.speed.value = '0.5';
+      await seekFraction(0.25); // pending seek
+      await waitStatusIn(['pending', 'paused', 'running'], 5000);
+
+      // start
+      click(controls.playPause);
+      await waitStatusIn(['running', 'paused', 'done'], 8000);
+
+      // pause
+      click(controls.playPause);
+      await waitStatusIn(['paused', 'done'], 5000);
+
+      // seek while paused
+      await seekFraction(0.75);
+      await waitStatusIn(['paused', 'pending'], 4000);
+
+      // resume
+      clickIfActive(controls.playPause, 'Resume');
+      await waitStatusIn(['running', 'done'], 8000);
+
+      // stop
+      clickIfActive(controls.stop, 'Stop');
+      await waitStatusIn(['done', 'idle'], 8000);
+
+      log('UI flow test PASSED');
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   window.__timemachineUITest = run;
+  window.__timemachineUIFlowTest = runFlow;
   log('UI test helper ready: call `window.__timemachineUITest()`');
   const createTestBtn = () => {
     if (document.getElementById('ui-test-runner')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'ui-test-runner';
+    wrap.style.position = 'fixed';
+    wrap.style.top = '12px';
+    wrap.style.right = '12px';
+    wrap.style.zIndex = '9999';
+    wrap.style.display = 'flex';
+    wrap.style.flexDirection = 'column';
+    wrap.style.gap = '8px';
+
     const btn = document.createElement('button');
-    btn.id = 'ui-test-runner';
-    btn.textContent = 'Запустить тест';
-    btn.style.position = 'fixed';
-    btn.style.top = '12px';
-    btn.style.right = '12px';
-    btn.style.zIndex = '9999';
+    btn.textContent = 'Запустить smoke';
     btn.style.padding = '10px 14px';
     btn.style.borderRadius = '12px';
     btn.style.border = 'none';
@@ -147,10 +220,33 @@
     btn.style.cursor = 'pointer';
     btn.style.boxShadow = '0 8px 24px rgba(14,165,233,0.3)';
     btn.addEventListener('click', () => {
-      log('Запуск UI теста по кнопке');
+      log('Запуск UI smoke теста по кнопке');
       run();
     });
-    document.body.appendChild(btn);
+
+    const btnFlow = document.createElement('button');
+    btnFlow.textContent = 'Запустить flow';
+    btnFlow.style.padding = '10px 14px';
+    btnFlow.style.borderRadius = '12px';
+    btnFlow.style.border = 'none';
+    btnFlow.style.background = '#22d3ee';
+    btnFlow.style.color = '#0f172a';
+    btnFlow.style.fontWeight = '700';
+    btnFlow.style.cursor = 'pointer';
+    btnFlow.style.boxShadow = '0 8px 24px rgba(34,211,238,0.35)';
+    btnFlow.addEventListener('click', () => {
+      log('Запуск UI flow теста по кнопке');
+      runFlow();
+    });
+
+    wrap.appendChild(btn);
+    wrap.appendChild(btnFlow);
+    document.body.appendChild(wrap);
   };
   createTestBtn();
+
+  const auto = new URLSearchParams(location.search).get('autotest');
+  if (auto === '1' || auto === 'true') {
+    runFlow();
+  }
 })();

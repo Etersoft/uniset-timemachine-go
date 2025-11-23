@@ -26,6 +26,7 @@
     label { display: block; font-size: 12px; color: #9ca3af; margin-bottom: 4px; }
     input { width: 100%; padding: 10px 12px; border-radius: 10px; border: 1px solid #233143; background: #0b1324; color: #e2e8f0; font-size: 14px; outline: none; }
     input:focus { border-color: #22d3ee; box-shadow: 0 0 0 3px rgba(34,211,238,0.12); }
+    input::placeholder { color: #94a3b8; }
     button { border: none; border-radius: 12px; padding: 12px; background: linear-gradient(135deg, #0ea5e9, #14b8a6); color: #0b1220; font-weight: 700; cursor: pointer; transition: transform 0.08s ease, box-shadow 0.14s ease, opacity 0.12s, background 0.12s, color 0.12s, border-color 0.12s; }
     button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 10px 28px rgba(14,165,233,0.35); }
     button:active:not(:disabled) { background: linear-gradient(135deg, #0284c7, #0ea5e9); box-shadow: 0 6px 18px rgba(14,165,233,0.28); }
@@ -42,6 +43,10 @@
     .status-line { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
     .status-item { background: #0b1324; border: 1px solid #1f2937; border-radius: 10px; padding: 8px 10px; color: #e5e7eb; font-weight: 600; min-width: 120px; }
     .status-item span { color: #94a3b8; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; display: block; }
+    .status-value { font-weight: 700; color: #e5e7eb; padding: 0; line-height: 20px; }
+    .status-ok { color: #34d399; }
+    .status-warn { color: #fbbf24; }
+    .status-err { color: #f87171; }
     .badge-done { background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.35); color: #34d399; border-radius: 8px; padding: 4px 8px; display: inline-block; font-weight: 700; }
     .error-text { color: #f87171; min-height: 18px; font-size: 13px; }
     .muted { color: #94a3b8; font-size: 12px; }
@@ -77,40 +82,53 @@
     .table-meta { color: #94a3b8; font-size: 13px; }
     .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid #1f2937; }
     .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
+    .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 420px; margin: 0 auto; position: relative; overflow: hidden; }
     .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .chart-controls input { max-width: 320px; }
     .chart-meta { color: #94a3b8; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
     .chart-legend-wrap { max-height: 180px; overflow-y: auto; border: 1px solid #1f2937; border-radius: 10px; margin-top: 8px; }
     .chart-legend-table { width: 100%; border-collapse: collapse; font-size: 13px; color: #e5e7eb; }
     .chart-legend-table th, .chart-legend-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937; }
+    .chart-legend-table th:nth-child(2), .chart-legend-table td:nth-child(2) { width: 1%; white-space: nowrap; }
+    .chart-legend-table td:nth-child(2) { width: 100%; max-width: 100%; }
     .chart-legend-color { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 8px; }
     .chart-color-input { width: 32px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
+    .chart-suggest-wrap { position: relative; }
+    .chart-suggest-box { position: absolute; top: 100%; left: 0; right: 0; background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; margin-top: 4px; box-shadow: 0 12px 30px rgba(0,0,0,0.4); max-height: 220px; overflow-y: auto; z-index: 5; display: none; }
+    .chart-suggest-item { padding: 8px 10px; cursor: pointer; color: #e5e7eb; }
+    .chart-suggest-item:hover { background: rgba(34,211,238,0.08); }
+    .chart-suggest-item.active { background: rgba(34,211,238,0.12); }
+    .chart-suggestion-highlight { color: #22d3ee; font-weight: 700; }
+    datalist { display: none; }
+    .input-disabled { opacity: 0.5; pointer-events: none; }
   </style>
 </head>
 <body>
   <div class="page">
     <div class="header">
       <div class="title">
-        <p class="eyebrow">TimeMachine · Player</p>
+        <p class="eyebrow">TimeMachine · Player · v2</p>
         <h1>История изменения датчиков</h1>
-        <div class="chips">
-          <span class="chip ok" id="chipStatus">idle</span>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:320px;">
+        <div class="status-line" style="justify-content:flex-end;">
+          <div class="status-item"><span>Status</span><div id="chipStatus">idle</div></div>
+          <div class="status-item"><span>Step</span><div id="statStep">-</div></div>
+          <div class="status-item"><span>TS</span><div id="statTs">-</div></div>
+          <div class="status-item"><span>Updates</span><div id="statUpdates">-</div></div>
+        </div>
+        <div class="chips" style="justify-content:flex-end; display:flex; gap:8px; flex-wrap:wrap;">
           <span class="chip warn">polling 1.5s</span>
           <span class="chip">REST /api/v2/*</span>
         </div>
       </div>
-      <div class="status-line" style="justify-content:flex-end;">
-        <div class="status-item"><span>Step</span><div id="statStep">-</div></div>
-        <div class="status-item"><span>TS</span><div id="statTs">-</div></div>
-        <div class="status-item"><span>Updates</span><div id="statUpdates">-</div></div>
-      </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" data-tab="control">Управление</button>
-      <button class="tab" data-tab="table">SViewer</button>
-      <button class="tab" data-tab="charts">Графики</button>
-    </div>
+      <div class="tabs">
+        <button class="tab active" data-tab="control">Управление</button>
+        <button class="tab" data-tab="table">Датчики</button>
+        <button class="tab" data-tab="charts">Графики</button>
+      </div>
 
     <div id="panel-control" class="tab-panel active">
     <div class="card">
@@ -138,8 +156,8 @@
           <input id="speed" type="number" step="0.1" value="1">
         </div>
         <div style="flex:1; min-width: 140px;">
-          <label for="window">Окно</label>
-          <input id="window" type="text" value="5s">
+          <label for="window">Кэш</label>
+          <input id="window" type="text" value="15s">
         </div>
       </div>
       <div class="preset-row" style="margin-top:8px;">
@@ -199,9 +217,9 @@
     </div>
 
     <div class="card">
-      <div class="row center" style="justify-content:space-between;">
-        <h3 style="margin:0; color:#f8fafc;">Лог</h3>
-        <button class="ghost" id="clearLogBtn" style="padding:8px 10px;">Очистить</button>
+      <div class="row center" style="justify-content:space-between; margin-bottom:8px;">
+        <h3 style="margin:0; color:#f8fafc; font-size:16px;">Лог</h3>
+        <button class="ghost" id="clearLogBtn" style="padding:6px 10px; font-size:12px;">Очистить</button>
       </div>
       <div class="log" id="log"></div>
     </div>
@@ -210,7 +228,7 @@
     <div id="panel-table" class="tab-panel">
       <div class="card">
         <div class="row center" style="justify-content:flex-start; gap:12px; flex-wrap:wrap;">
-          <input id="tableFilter" type="text" placeholder="Фильтр" style="max-width:340px; flex:0 0 auto;">
+          <input id="tableFilter" type="text" placeholder="Введите имя или текст..." style="max-width:340px; flex:0 0 auto;">
           <span class="table-meta" id="tableMeta" style="min-width:160px;">—</span>
         </div>
         <div class="table-wrap" style="margin-top:12px;">
@@ -231,33 +249,32 @@
     <div id="panel-charts" class="tab-panel">
       <div class="card">
         <div class="chart-controls">
-          <div style="flex:1; min-width:260px;">
-            <label for="chartSensors">Добавить датчик (id или name, Enter добавляет)</label>
-            <input id="chartSensors" type="text" placeholder="Sensor10001_S" list="chartSensorsSuggestions" autocomplete="off">
-            <datalist id="chartSensorsSuggestions"></datalist>
+          <div style="flex:1; min-width:260px;" class="chart-suggest-wrap">
+            <label for="chartSensors">Добавить датчик</label>
+            <input id="chartSensors" type="text" placeholder="Введите имя или текст..." autocomplete="off">
+            <div id="chartSuggestionsBox" class="chart-suggest-box"></div>
           </div>
           <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
-            <button id="chartApplyBtn" class="ghost" type="button">Обновить график</button>
             <button id="chartClearBtn" class="ghost" type="button">Очистить</button>
-            <button id="chartResetBtn" class="ghost" type="button">Reset zoom</button>
-            <button id="chartAutoZoomBtn" class="ghost" type="button">Autozoom Y</button>
             <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px;">
               <input id="chartAutoUpdate" type="checkbox" checked style="width:auto; margin:0;">
               Автообновление
             </label>
-            <div style="display:flex; align-items:center; gap:6px;">
-              <label for="chartWindow" style="margin:0; color:#94a3b8;">Окно, сек:</label>
-              <input id="chartWindow" type="number" value="300" min="0" step="10" style="width:90px; padding:8px;">
-            </div>
+            <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px;">
+              <input id="chartFill" type="checkbox" checked style="width:auto; margin:0;">
+              Фон
+            </label>
           </div>
           <div class="chart-meta" id="chartMeta">Нет данных</div>
         </div>
         <div class="chart-wrap">
-          <canvas id="chartCanvas" style="width:100%; min-height:360px;"></canvas>
+          <div class="chart-box">
+            <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
+          </div>
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
           <div class="chart-legend-wrap">
             <table class="chart-legend-table" id="chartLegendTable">
-              <thead><tr><th>Сенсор</th><th>Текущее значение</th></tr></thead>
+              <thead><tr><th>Датчик</th><th>Текущее значение</th><th>Время</th><th></th></tr></thead>
               <tbody id="chartLegendBody"></tbody>
             </table>
           </div>
@@ -278,9 +295,23 @@
     </form>
   </dialog>
 
-  <script src="/ui/uPlot.iife.min.js"></script>
+  <script src="/ui/chart.umd.min.js"></script>
+  <script src="/ui/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script src="/ui/chartjs-plugin-zoom.min.js"></script>
   <script>
-    const logUI = (msg) => console.info(`[UI LOG] ${msg}`);
+  const logUIEnabled = false;
+    const logUI = (msg) => {
+      if (logUIEnabled) console.info(`[UI LOG] ${msg}`);
+    };
+    const chartLogEnabled = true;
+    const chartLog = (msg, payload) => {
+      if (!chartLogEnabled) return;
+      if (payload !== undefined) {
+        console.info(`[chart] ${msg}`, payload);
+      } else {
+        console.info(`[chart] ${msg}`);
+      }
+    };
     const els = {
       inputs: {
         from: document.getElementById('from'),
@@ -330,17 +361,15 @@
       },
       charts: {
         sensors: document.getElementById('chartSensors'),
-        apply: document.getElementById('chartApplyBtn'),
         clear: document.getElementById('chartClearBtn'),
         meta: document.getElementById('chartMeta'),
-        reset: document.getElementById('chartResetBtn'),
         empty: document.getElementById('chartEmpty'),
         suggestions: document.getElementById('chartSensorsSuggestions'),
+        suggestBox: document.getElementById('chartSuggestionsBox'),
         canvas: document.getElementById('chartCanvas'),
         legendBody: document.getElementById('chartLegendBody'),
-        autozoom: document.getElementById('chartAutoZoomBtn'),
+        fill: document.getElementById('chartFill'),
         autoUpdate: document.getElementById('chartAutoUpdate'),
-        window: document.getElementById('chartWindow'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
     };
@@ -354,6 +383,7 @@
       reconnectIn: null,
       previewTs: null,
       lastParamsSig: '',
+      pausedAtTs: null,
     };
 
     const tableState = {
@@ -371,6 +401,14 @@
       autoUpdate: true,
       windowSec: 300,
       lastParamsSig: '',
+      lastSkip: '',
+      range: { from: null, to: null },
+      suggest: { items: [], active: -1 },
+    };
+    const sensorIndex = {
+      byId: new Map(),    // id -> {id,name,textname}
+      byName: new Map(),  // lower(name) -> id
+      hydrated: false,
     };
 
     function log(message, ok = true) {
@@ -390,7 +428,8 @@
         node.classList.toggle('active', name === tab);
       });
       if (tab === 'charts') {
-        redrawChart();
+        preloadSensors();
+        setTimeout(() => rebuildChart(true), 0);
       }
     }
 
@@ -414,6 +453,8 @@
             handleWSMessage(msg);
           } catch (err) {
             log(`WS parse: ${err.message}`, false);
+            fetchSnapshotFallback();
+            ws.close();
           }
         };
       } catch (err) {
@@ -436,6 +477,7 @@
       }
       if (tsStr) {
         tableState.lastTs = tsStr;
+        state.pausedAtTs = tsStr;
       }
       switch (msg.type) {
         case 'reset':
@@ -462,10 +504,7 @@
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
-        tableState.meta.set(key, {
-          name: item.name || `id${key}`,
-          textname: item.textname || '',
-        });
+        registerSensorMeta(key, item.name, item.textname);
         const hasValue = !!item.has_value || !!item.hasValue;
         if (hasValue) {
           tableState.rows.set(key, {
@@ -492,10 +531,12 @@
         const hadValue = prev.hasValue;
         const changed = !hadValue || prev.value !== item.value;
         const meta = tableState.meta.get(key) || {};
+        const name = item.name || meta.name || prev.name || `id${key}`;
+        registerSensorMeta(key, name, item.textname || meta.textname || prev.textname);
         tableState.rows.set(key, {
           id: key,
-          name: meta.name || prev.name || `id${key}`,
-          textname: meta.textname || prev.textname || '',
+          name,
+          textname: item.textname || meta.textname || prev.textname || '',
           value: item.value,
           hasValue: !!item.has_value || item.hasValue || hadValue,
           stepID: item.step_id || tableState.lastStep || prev.stepID || 0,
@@ -503,19 +544,36 @@
           changedAt: changed ? now : prev.changedAt,
         });
       });
+      refreshChartSuggestions();
     }
 
     function renderTable(force) {
       if (!els.table.body) return;
-      const rows = Array.from(tableState.rows.values());
       const filter = (tableState.filter || '').trim();
+      const useMeta = !!filter;
+      const baseRows = useMeta
+        ? Array.from(tableState.meta.entries()).map(([id, meta]) => {
+            const row = tableState.rows.get(id) || {};
+            const hasValue = !!row.hasValue;
+            return {
+              id,
+              name: meta.name || `id${id}`,
+              textname: meta.textname || '',
+              value: hasValue ? row.value : '—',
+              hasValue,
+              stepID: row.stepID,
+              ts: row.ts,
+              changedAt: row.changedAt,
+            };
+          })
+        : Array.from(tableState.rows.values());
       const filtered = filter
-        ? rows.filter(r => {
+        ? baseRows.filter(r => {
             const name = (r.name || '').toLowerCase();
             const textname = (r.textname || '').toLowerCase();
             return name.includes(filter) || textname.includes(filter);
           })
-        : rows;
+        : baseRows;
       filtered.sort((a, b) => {
         if (a.name === b.name) return a.id - b.id;
         return a.name.localeCompare(b.name);
@@ -531,55 +589,119 @@
         const ts = tableState.lastTs || '—';
         els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts}`;
       }
+      if (els.table.filter) {
+        setDisabled(els.table.filter, tableState.meta.size === 0);
+      }
     }
 
     const chartColors = ['#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#a78bfa', '#f87171', '#4ade80', '#60a5fa'];
 
+    function pickChartColor(id, usedColors, idxHint) {
+      const used = usedColors || new Set();
+      for (let i = 0; i < chartColors.length; i++) {
+        const color = chartColors[(idxHint + i) % chartColors.length];
+        if (!used.has(color.toLowerCase())) return color;
+      }
+      const hue = (Number(id) * 37 + (idxHint || 0) * 53) % 360;
+      const color = `hsl(${hue}, 68%, 58%)`;
+      if (!used.has(color.toLowerCase())) return color;
+      const alt = `hsl(${(hue + 27) % 360}, 68%, 58%)`;
+      return alt;
+    }
+
     function chartLabelByID(id) {
-      const meta = tableState.meta.get(id) || {};
+      const meta = tableState.meta.get(id) || sensorIndex.byId.get(id) || {};
       if (meta.name) return `${meta.name} (${id})`;
       return `id${id}`;
+    }
+
+    function registerSensorMeta(id, name, textname) {
+      if (!Number.isFinite(id)) return;
+      const prev = tableState.meta.get(id) || {};
+      const resolvedName = name || prev.name || `id${id}`;
+      const resolvedText = textname !== undefined ? textname : prev.textname;
+      tableState.meta.set(id, { name: resolvedName, textname: resolvedText || '' });
+      sensorIndex.byId.set(id, { id, name: resolvedName, textname: resolvedText || '' });
+      sensorIndex.byName.set(String(resolvedName).toLowerCase(), id);
+    }
+
+    function knownSensorIdByToken(token) {
+      if (!token) return null;
+      const num = Number(token);
+      if (Number.isFinite(num) && sensorIndex.byId.has(num)) {
+        return num;
+      }
+      const byName = sensorIndex.byName.get(token.toLowerCase());
+      return Number.isFinite(byName) ? byName : null;
     }
 
     function parseChartSensors(input) {
       if (!input) return [];
       const tokens = input.split(',').map(t => t.trim()).filter(Boolean);
       if (!tokens.length) return [];
-      const byName = new Map();
-      tableState.meta.forEach((meta, id) => {
-        if (meta?.name) byName.set(String(meta.name).toLowerCase(), id);
-      });
       const out = [];
       tokens.forEach(tok => {
-        const num = Number(tok);
-        if (Number.isFinite(num)) {
-          out.push(num);
-          return;
-        }
-        const found = byName.get(tok.toLowerCase());
-        if (found) out.push(found);
+        const id = knownSensorIdByToken(tok);
+        if (Number.isFinite(id)) out.push(id);
       });
       return Array.from(new Set(out));
     }
 
+    function normalizeSensorList(list) {
+      if (!Array.isArray(list)) return [];
+      const res = [];
+      list.forEach((id) => {
+        const num = Number(id);
+        if (!Number.isFinite(num)) return;
+        if (!sensorIndex.byId.has(num)) {
+          registerSensorMeta(num, `id${num}`, '');
+        }
+        if (sensorIndex.byId.has(num)) res.push(num);
+      });
+      return Array.from(new Set(res));
+    }
+
     function rebuildChartSeries() {
-      chartState.datasets = new Map();
+      const prev = chartState.datasets;
+      const next = new Map();
+      const used = new Set();
       chartState.selected.forEach((id, idx) => {
-        chartState.datasets.set(id, {
+        const existing = prev.get(id);
+        const preserved = existing?.color;
+        const color = preserved || pickChartColor(id, used, idx);
+        used.add(color.toLowerCase());
+        const data = existing?.data ? existing.data.slice() : [];
+        const lastValue = existing?.lastValue ?? null;
+        const lastTs = existing?.lastTs ?? null;
+        next.set(id, {
           label: chartLabelByID(id),
-          color: chartColors[idx % chartColors.length],
-          data: [],
-          lastValue: null,
+          color,
+          data,
+          lastValue,
+          lastTs,
         });
       });
-      rebuildChart();
+      chartState.datasets = next;
+      if (chartState.chart) {
+        syncChartData();
+      } else {
+        rebuildChart();
+      }
     }
 
     function updateChartMeta(msg) {
       if (!els.charts.meta) return;
       const sensors = chartState.selected.length ? chartState.selected.map(chartLabelByID).join(', ') : '—';
-      const points = chartState.chart ? (chartState.chart.data.labels?.length || 0) : 0;
-      els.charts.meta.textContent = chartState.chart ? `Сенсоры: ${sensors} · Точек: ${points}` : 'Нет данных';
+      const points = chartState.chart
+        ? (chartState.chart.data.labels?.length || 0)
+        : Array.from(chartState.datasets.values()).reduce((acc, ds) => Math.max(acc, ds.data?.length || 0), 0);
+      let metaText = chartState.selected.length ? `Точек: ${points}` : 'Нет данных';
+      if (chartState.range.from && chartState.range.to) {
+        const from = new Date(chartState.range.from).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const to = new Date(chartState.range.to).toISOString().replace(/\.\d{3}Z$/, 'Z');
+        metaText += ` · X: ${from} → ${to}`;
+      }
+      els.charts.meta.textContent = metaText;
       if (msg) {
         els.charts.meta.textContent += ` · ${msg}`;
       }
@@ -595,92 +717,242 @@
       }
     }
 
-    function refreshChartSuggestions() {
-      if (!els.charts.suggestions) return;
-      const opts = [];
-      tableState.meta.forEach((meta, id) => {
-        const label = meta?.name ? `${meta.name}` : `id${id}`;
-        opts.push({value: meta?.name || String(id), label: `${label} (${id})`});
-      });
-      const limited = opts.slice(0, 200);
-      els.charts.suggestions.innerHTML = limited.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+    function renderLegendTable() {
+      if (!els.charts.legendBody) return;
+      try {
+        const rows = chartState.selected.map((id) => {
+          const ds = chartState.datasets.get(id) || {};
+          const val = ds.lastValue;
+          const color = ds.color || '#22d3ee';
+          const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
+          return `<tr><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val ?? '—'}</td><td>${ts}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
+        }).join('');
+        els.charts.legendBody.innerHTML = rows || '<tr><td colspan="4" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
+      } catch (err) {
+        els.charts.legendBody.innerHTML = `<tr><td colspan="4" style="color:#f87171;">${err?.message || err}</td></tr>`;
+      }
     }
 
-    function rebuildChart() {
+    function refreshChartSuggestions() {
+      const opts = [];
+      const usedValues = new Set();
+      sensorIndex.byId.forEach((meta, id) => {
+        if (chartState.selected.includes(id)) return; // уже на графике
+        const label = meta?.name ? `${meta.name}` : `id${id}`;
+        const val = meta?.name || `id${id}`;
+        if (!val || usedValues.has(val)) return;
+        usedValues.add(val);
+        opts.push({ value: val, label: `${label} (${id})` });
+      });
+      renderChartSuggestions(els.charts.sensors?.value || '');
+      updateChartInputState();
+    }
+
+    function renderChartSuggestions(query) {
+      if (!els.charts.suggestBox) return;
+      const q = (query || '').trim().toLowerCase();
+      const items = [];
+      let availableCount = 0;
+      sensorIndex.byId.forEach((meta, id) => {
+        if (chartState.selected.includes(id)) return;
+        const name = meta?.name || `id${id}`;
+        const text = name.toLowerCase();
+        if (q && !text.includes(q) && !String(id).includes(q)) return;
+        items.push({ id, name });
+        availableCount++;
+      });
+      items.sort((a, b) => a.name.localeCompare(b.name));
+      const limited = items.slice(0, 50);
+      if (!limited.length || q.length === 0) {
+        els.charts.suggestBox.style.display = 'none';
+        els.charts.suggestBox.innerHTML = '';
+        updateChartInputState(availableCount);
+        return;
+      }
+      chartState.suggest.items = limited;
+      chartState.suggest.active = limited.length ? 0 : -1;
+      const highlight = (str) => {
+        if (!q) return str;
+        const idx = str.toLowerCase().indexOf(q);
+        if (idx === -1) return str;
+        const before = str.slice(0, idx);
+        const match = str.slice(idx, idx + q.length);
+        const after = str.slice(idx + q.length);
+        return `${before}<span class="chart-suggestion-highlight">${match}</span>${after}`;
+      };
+      els.charts.suggestBox.innerHTML = limited.map((item, idx) => {
+        const activeClass = idx === chartState.suggest.active ? 'active' : '';
+        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.id}">${highlight(item.name)} <span style="color:#94a3b8;">(${item.id})</span></div>`;
+      }).join('');
+      els.charts.suggestBox.style.display = 'block';
+      updateChartInputState(availableCount);
+    }
+
+    function hideChartSuggestions() {
+      if (!els.charts.suggestBox) return;
+      els.charts.suggestBox.style.display = 'none';
+      els.charts.suggestBox.innerHTML = '';
+      chartState.suggest = { items: [], active: -1 };
+    }
+
+    function moveSuggestActive(delta) {
+      const items = chartState.suggest.items || [];
+      if (!items.length || !els.charts.suggestBox) return;
+      const next = (chartState.suggest.active + delta + items.length) % items.length;
+      chartState.suggest.active = next;
+      Array.from(els.charts.suggestBox.children).forEach((el, idx) => {
+        el.classList.toggle('active', idx === next);
+      });
+    }
+
+    function buildChartDatasets() {
+      return Array.from(chartState.datasets.values()).map(ds => ({
+        label: ds.label,
+        data: ds.data,
+        borderColor: ds.color || '#22d3ee',
+        backgroundColor: els.charts.fill?.checked ? hexToRGBA(ds.color || '#22d3ee', 0.15) : ds.color || '#22d3ee',
+        tension: 0.08,
+        spanGaps: true,
+        pointRadius: 0,
+        borderWidth: 1,
+        fill: !!(els.charts.fill && els.charts.fill.checked),
+      }));
+    }
+
+    function hexToRGBA(hex, alpha) {
+      if (!hex) return hex;
+      const h = hex.replace('#', '');
+      const bigint = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+      const r = (bigint >> 16) & 255;
+      const g = (bigint >> 8) & 255;
+      const b = bigint & 255;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function updateChartInputState(availableCount) {
+      if (!els.charts.sensors) return;
+      const totalAvailable = availableCount !== undefined ? availableCount : sensorIndex.byId.size - chartState.selected.length;
+      const disable = totalAvailable <= 0;
+      els.charts.sensors.disabled = disable;
+      if (els.charts.sensors.parentElement) {
+        els.charts.sensors.parentElement.classList.toggle('input-disabled', disable);
+      }
+      if (disable) hideChartSuggestions();
+    }
+
+    function syncChartData() {
+      if (!chartState.chart) return;
+      chartState.chart.data.labels = extractChartLabels();
+      chartState.chart.data.datasets = buildChartDatasets();
+      const hasRange = chartState.range.from && chartState.range.to;
+      chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
+      chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+      chartState.chart.update('none');
+      updateChartMeta();
+      renderLegendTable();
+    }
+
+    function rebuildChart(force = false) {
       if (!els.charts.canvas) return;
       if (!chartState.selected.length) {
-        if (chartState.chart) {
-          chartState.chart.destroy();
-          chartState.chart = null;
-        }
+        destroyChart();
         updateChartMeta();
         renderLegendTable();
         return;
       }
-      const ctx = els.charts.canvas.getContext('2d');
-      const labels = extractChartLabels();
-      const datasets = Array.from(chartState.datasets.values()).map(ds => ({
-        label: ds.label,
-        data: ds.data,
-        borderColor: ds.color || '#22d3ee',
-        backgroundColor: ds.color || '#22d3ee',
-        tension: 0.1,
-        spanGaps: true,
-        pointRadius: 0,
-      }));
-      if (chartState.chart) {
-        chartState.chart.data.labels = labels;
-        chartState.chart.data.datasets = datasets;
-        chartState.chart.update('none');
-      } else {
-        chartState.chart = new Chart(ctx, {
-          type: 'line',
-          data: {labels, datasets},
-          options: {
-            animation: false,
-            responsive: true,
-            maintainAspectRatio: false,
-            parsing: false,
-            scales: {
-              x: {
-                type: 'time',
-                time: {unit: 'second'},
-                ticks: {color: '#94a3b8'},
-                grid: {color: 'rgba(255,255,255,0.05)'},
-              },
-              y: {
-                ticks: {color: '#94a3b8'},
-                grid: {color: 'rgba(255,255,255,0.05)'},
-              },
-            },
-            plugins: {
-              legend: {display: false},
-              tooltip: {
-                mode: 'nearest',
-                intersect: false,
-                callbacks: {
-                  title: (items) => items.length ? new Date(items[0].parsed.x).toISOString() : '',
-                  label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}`,
-                },
-              },
-              zoom: {
-                zoom: {
-                  wheel: {enabled: true},
-                  pinch: {enabled: true},
-                  mode: 'x',
-                },
-                pan: {
-                  enabled: true,
-                  mode: 'x',
-                },
-              },
-            },
-            interaction: {mode: 'nearest', intersect: false},
-          },
-        });
+      const hasRange = chartState.range.from && chartState.range.to;
+      const panelVisible = els.panels?.charts?.classList.contains('active');
+      const container = els.charts.canvas.parentElement || els.charts.canvas;
+      const rawW = container.clientWidth || container.offsetWidth || 0;
+      const rawH = container.clientHeight || container.offsetHeight || 0;
+      const width = Math.max(320, Math.floor(rawW || 800));
+      const height = Math.max(300, Math.floor(rawH || 420));
+      if (!panelVisible && !force) {
+        const reason = `hidden:${width}x${height}`;
+        if (chartState.lastSkip !== reason) {
+          chartLog('skip rebuild: panel hidden', { panelVisible, width, height });
+          chartState.lastSkip = reason;
+        }
+        return;
       }
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        const reason = `invalid:${width}x${height}`;
+        if (chartState.lastSkip !== reason) {
+          chartLog('skip rebuild: invalid size', { width, height });
+          chartState.lastSkip = reason;
+        }
+        return;
+      }
+      destroyChart();
+      chartState.lastSkip = '';
+      if (!window.Chart) {
+        console.error('[chart] Chart.js not loaded');
+        return;
+      }
+      const ctx = els.charts.canvas.getContext('2d');
+      els.charts.canvas.width = width;
+      els.charts.canvas.height = height;
+      const labels = extractChartLabels();
+      const datasets = buildChartDatasets();
+      chartState.chart = new Chart(ctx, {
+        type: 'line',
+        data: {labels, datasets},
+        options: {
+          animation: false,
+          responsive: false,
+          maintainAspectRatio: false,
+          parsing: false,
+          resizeDelay: 0,
+          scales: {
+            x: {
+              type: 'time',
+              time: {unit: 'second'},
+              min: hasRange ? chartState.range.from : undefined,
+              max: hasRange ? chartState.range.to : undefined,
+              ticks: {color: '#94a3b8'},
+              grid: {color: 'rgba(255,255,255,0.05)'},
+            },
+            y: {
+              ticks: {color: '#94a3b8'},
+              grid: {
+                color: (ctx) => {
+                  if (ctx.tick && ctx.tick.value === 0) return '#ffffff';
+                  return 'rgba(255,255,255,0.05)';
+                },
+                borderColor: 'rgba(255,255,255,0.08)',
+              },
+            },
+          },
+          plugins: {
+            legend: {display: false},
+            tooltip: {
+              mode: 'nearest',
+              intersect: false,
+              callbacks: {
+                title: (items) => items.length ? new Date(items[0].parsed.x).toISOString() : '',
+                label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}`,
+              },
+            },
+            zoom: {
+              zoom: {wheel: {enabled: false}, pinch: {enabled: false}, mode: 'x'},
+              pan: {enabled: false},
+            },
+          },
+          interaction: {mode: 'nearest', intersect: false},
+        },
+      });
+      chartLog('rebuild chart', { width, height, datasets: chartState.datasets.size });
       updateChartMeta();
       renderLegendTable();
+    }
+
+    function destroyChart() {
+      const existing = (window.Chart && typeof Chart.getChart === 'function') ? Chart.getChart(els.charts.canvas) : null;
+      if (existing) existing.destroy();
+      if (chartState.chart) {
+        chartState.chart.destroy();
+        chartState.chart = null;
+      }
     }
 
     function extractChartLabels() {
@@ -692,9 +964,6 @@
     }
 
     function resetChartZoom() {
-      if (!chartState.chart) return;
-      chartState.chart.resetZoom();
-      updateChartMeta();
     }
 
     function autoZoomY() {
@@ -718,6 +987,11 @@
     }
 
     function trimDataset(ds, currentTs) {
+      // Если известен диапазон from/to — отбрасываем всё, что за его пределами.
+      if (chartState.range.from && chartState.range.to) {
+        ds.data = ds.data.filter(p => p.x >= chartState.range.from && p.x <= chartState.range.to);
+        return;
+      }
       if (!chartState.windowSec || chartState.windowSec <= 0) return;
       const threshold = currentTs - chartState.windowSec * 1000;
       ds.data = ds.data.filter(p => p.x >= threshold);
@@ -725,59 +999,88 @@
 
     function appendChartPoint(tsStr, updates) {
       if (!chartState.selected.length || !tsStr) return;
+      if (!chartState.autoUpdate) return;
       if (els.charts.autoUpdate && !els.charts.autoUpdate.checked) return;
       const d = parseISO(tsStr);
       if (!d) return;
       const t = d.getTime();
+      const hasFixedRange = chartState.range.from && chartState.range.to;
+      if (hasFixedRange && (t < chartState.range.from || t > chartState.range.to)) {
+        // За пределами выбранного диапазона отбрасываем.
+        return;
+      }
       const updateMap = new Map();
       (updates || []).forEach(item => {
         const id = Number(item.id);
         if (Number.isFinite(id)) updateMap.set(id, item.value);
       });
+      const usedColors = new Set();
+      chartState.datasets.forEach(ds => {
+        if (ds.color) usedColors.add(String(ds.color).toLowerCase());
+      });
       chartState.selected.forEach((id, idx) => {
         if (!chartState.datasets.has(id)) {
+          const color = pickChartColor(id, usedColors, idx);
           chartState.datasets.set(id, {
             label: chartLabelByID(id),
-            borderColor: chartColors[idx % chartColors.length],
-            backgroundColor: chartColors[idx % chartColors.length],
-            tension: 0.1,
-            spanGaps: true,
+            color,
             data: [],
-            pointRadius: 0,
             lastValue: null,
+            lastTs: null,
           });
+          usedColors.add(String(color).toLowerCase());
         }
         const ds = chartState.datasets.get(id);
         const val = updateMap.has(id) ? updateMap.get(id) : ds.lastValue;
-        ds.lastValue = val;
-        ds.data.push({x: t, y: val});
+        const y = val === undefined ? null : val;
+        ds.lastValue = y;
+        ds.lastTs = t;
+        ds.data.push({x: t, y});
         if (ds.data.length > chartState.maxPoints) ds.data.shift();
         trimDataset(ds, t);
       });
-      rebuildChart();
+      if (chartState.chart) {
+        syncChartData();
+      } else {
+        rebuildChart();
+      }
     }
 
     function applyChartSensors(list) {
-      chartState.selected = list || [];
+      const normalized = normalizeSensorList(list || []);
+      chartState.selected = normalized;
       if (els.charts.sensors) {
         els.charts.sensors.value = '';
       }
       rebuildChartSeries();
+      hideChartSuggestions();
     }
 
     function clearChart() {
-      chartState.selected = [];
-      chartState.datasets = new Map();
-      rebuildChart();
+      chartState.datasets.forEach((ds) => {
+        ds.data = [];
+        ds.lastValue = null;
+        ds.lastTs = null;
+      });
+      if (chartState.chart) {
+        syncChartData();
+      } else {
+        rebuildChart();
+      }
       if (els.charts.sensors) els.charts.sensors.value = '';
     }
 
     function addSensorsFromInput() {
       const raw = els.charts.sensors?.value || '';
       const ids = parseChartSensors(raw);
-      if (!ids.length) return;
-      const merged = Array.from(new Set([...chartState.selected, ...ids]));
+      const filtered = ids.filter(id => !chartState.selected.includes(id));
+      if (!filtered.length) {
+        log('Датчики не найдены в подсказках/конфиге или уже добавлены', false);
+        return;
+      }
+      const merged = Array.from(new Set([...chartState.selected, ...filtered]));
       applyChartSensors(merged);
+      hideChartSuggestions();
     }
 
     function hydrateChartDefaultsFromParams() {
@@ -829,6 +1132,44 @@
       });
     }
 
+    function mergeSensorsFromAPI(list) {
+      if (!Array.isArray(list)) return;
+      list.forEach((item) => {
+        const id = Number(item.id);
+        if (!Number.isFinite(id)) return;
+        registerSensorMeta(id, item.name, item.textname);
+      });
+      refreshChartSuggestions();
+    }
+
+    async function fetchSnapshotFallback() {
+      try {
+        const tsDate = currentTsFromServer();
+        const ts = tsDate ? toRFC3339(tsDate) : '';
+        if (!ts) return;
+        const data = await requestJSON('POST', '/api/v1/snapshot', { ts });
+        const updates = data?.updates || data?.Updates || [];
+        const stepTs = data?.step_ts || data?.StepTS || '';
+        applySnapshot(updates, stepTs);
+        renderTable(true);
+      } catch (err) {
+        log(`Snapshot fallback: ${err.message}`, false);
+      }
+    }
+
+    async function preloadSensors() {
+      if (sensorIndex.hydrated) return;
+      try {
+        const data = await requestJSON('GET', '/api/v2/sensors');
+        const list = data?.sensors || [];
+        mergeSensorsFromAPI(list);
+        sensorIndex.hydrated = list.length > 0;
+        renderChartSuggestions(els.charts.sensors?.value || '');
+      } catch (err) {
+        logUI(`[chart] preload sensors failed: ${err.message}`);
+      }
+    }
+
     function statusNormalize(s) {
       return String(s || 'idle').toLowerCase();
     }
@@ -853,6 +1194,30 @@
         return r2;
       }
       return r2.valid ? r2 : { from: null, to: null, valid: false };
+    }
+
+    function syncChartRange(params, pending) {
+      const range = getEffectiveRange(params, pending);
+      if (!range.valid) {
+        chartState.range = { from: null, to: null };
+        return;
+      }
+      const fromMs = range.from.getTime();
+      const toMs = range.to.getTime();
+      const prevFrom = chartState.range.from;
+      const prevTo = chartState.range.to;
+      chartState.range = { from: fromMs, to: toMs };
+      if (prevFrom !== fromMs || prevTo !== toMs) {
+        // Перебираем датасеты и удаляем точки за пределами нового диапазона.
+        chartState.datasets.forEach(ds => {
+          ds.data = ds.data.filter(p => p.x >= fromMs && p.x <= toMs);
+        });
+        if (chartState.chart) {
+          syncChartData();
+        } else {
+          rebuildChart(true);
+        }
+      }
     }
 
     function currentTsFromServer() {
@@ -901,22 +1266,27 @@
       els.status.ts.textContent = lastTsText;
       els.status.updates.textContent = updates;
       els.status.error.textContent = state.model.error ? `Ошибка: ${state.model.error}` : '';
-      els.chipStatus.classList.remove('ok', 'warn', 'err');
-      if (st === 'running') els.chipStatus.classList.add('ok');
-      if (st === 'paused' || st === 'pending') els.chipStatus.classList.add('warn');
-      if (st === 'failed') els.chipStatus.classList.add('err');
-      if (st === 'done') {
-        els.status.badge.classList.add('badge-done');
-      } else {
-        els.status.badge.classList.remove('badge-done');
-      }
+      els.chipStatus.className = 'status-value';
+      if (st === 'running') els.chipStatus.classList.add('status-ok');
+      if (st === 'paused' || st === 'pending') els.chipStatus.classList.add('status-warn');
+      if (st === 'failed') els.chipStatus.classList.add('status-err');
+      els.status.badge.classList.toggle('badge-done', st === 'done');
       if (pendingSeek && (st === 'pending' || st === 'idle')) {
         els.status.ts.textContent = pendingSeek;
       }
+      syncChartRange(params, pending);
       updateTimeline();
       updateControls();
       logIndicators(st);
+      toggleChartAutoUpdate(st);
       updateChartMeta();
+    }
+
+    function toggleChartAutoUpdate(status) {
+      if (!els.charts.autoUpdate) return;
+      const shouldRun = status === 'running' || status === 'stopping';
+      chartState.autoUpdate = shouldRun;
+      els.charts.autoUpdate.checked = shouldRun;
     }
 
     function logIndicators(status) {
@@ -1042,6 +1412,7 @@
       }
       hydrateChartDefaultsFromParams();
       syncChartWithParams(state.model.params || state.model.Params);
+      syncChartRange(state.model.params || state.model.Params, pending);
       logUI(`refresh result status=${status} last_ts=${state.model.last_ts || state.model.LastTS} pendingRange=${pendingRange ? 'yes' : 'no'}`);
       updateStatusView();
     }
@@ -1126,12 +1497,6 @@
       if (els.charts.clear) {
         els.charts.clear.addEventListener('click', () => clearChart());
       }
-      if (els.charts.reset) {
-        els.charts.reset.addEventListener('click', () => resetChartZoom());
-      }
-      if (els.charts.autozoom) {
-        els.charts.autozoom.addEventListener('click', () => autoZoomY());
-      }
       if (els.charts.autoUpdate) {
         els.charts.autoUpdate.addEventListener('change', () => {
           chartState.autoUpdate = !!els.charts.autoUpdate.checked;
@@ -1151,21 +1516,65 @@
             rebuildChart();
           }
         });
+        els.charts.legendBody.addEventListener('click', (e) => {
+          const target = e.target;
+          if (target && target.matches('button.chart-remove-btn')) {
+            const id = Number(target.dataset.sensor);
+            if (!Number.isFinite(id)) return;
+            const filtered = chartState.selected.filter(x => x !== id);
+            applyChartSensors(filtered);
+          }
+        });
+      }
+      if (els.charts.suggestBox) {
+        els.charts.suggestBox.addEventListener('mousedown', (e) => {
+          const target = e.target.closest('.chart-suggest-item');
+          if (!target) return;
+          const id = Number(target.dataset.sensor);
+          if (!Number.isFinite(id)) return;
+          applyChartSensors([...chartState.selected, id]);
+          hideChartSuggestions();
+        });
       }
       if (els.charts.window) {
         els.charts.window.addEventListener('change', () => {
           const v = Number(els.charts.window.value);
           if (!Number.isFinite(v) || v < 0) return;
           chartState.windowSec = v;
+          const now = Date.now();
+          chartState.datasets.forEach(ds => trimDataset(ds, now));
+          syncChartData();
         });
       }
       if (els.charts.sensors) {
         els.charts.sensors.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            addSensorsFromInput();
+            const active = chartState.suggest.items[chartState.suggest.active];
+            if (active) {
+              applyChartSensors([...chartState.selected, active.id]);
+              hideChartSuggestions();
+            } else {
+              addSensorsFromInput();
+            }
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            e.target.blur();
+            hideChartSuggestions();
+          } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            moveSuggestActive(e.key === 'ArrowDown' ? 1 : -1);
+          } else {
+            setTimeout(() => renderChartSuggestions(e.target.value), 0);
           }
         });
+        els.charts.sensors.addEventListener('input', (e) => renderChartSuggestions(e.target.value));
+        els.charts.sensors.addEventListener('change', () => addSensorsFromInput());
+        els.charts.sensors.addEventListener('focus', (e) => renderChartSuggestions(e.target.value));
+        els.charts.sensors.addEventListener('blur', () => setTimeout(hideChartSuggestions, 120));
+      }
+      if (els.charts.fill) {
+        els.charts.fill.addEventListener('change', () => syncChartData());
       }
     }
 
@@ -1309,6 +1718,7 @@
 
     bindActions();
     updateControls();
+    preloadSensors();
     startPolling();
     connectWS();
     renderTable(true);
@@ -1345,13 +1755,3 @@
   </script>
 </body>
 </html>
-    function renderLegendTable() {
-      if (!els.charts.legendBody) return;
-      const rows = chartState.selected.map((id) => {
-        const ds = chartState.datasets.get(id) || {};
-        const val = ds.lastValue;
-        const color = ds.color || '#22d3ee';
-        return `<tr><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}"><span class="chart-legend-color" style="background:${color}"></span>${chartLabelByID(id)}</td><td>${val ?? '—'}</td></tr>`;
-      }).join('');
-      els.charts.legendBody.innerHTML = rows || '<tr><td colspan="2" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
-    }

@@ -183,6 +183,24 @@ func (s *StateStreamer) addClient(c *wsClient) {
 	s.mu.Unlock()
 }
 
+// ListSensors возвращает отсортированный список датчиков (для подсказок UI).
+func (s *StateStreamer) ListSensors() []SensorInfo {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	list := make([]SensorInfo, 0, len(s.sensors))
+	for _, info := range s.sensors {
+		list = append(list, info)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Name == list[j].Name {
+			return list[i].ID < list[j].ID
+		}
+		return list[i].Name < list[j].Name
+	})
+	return list
+}
+
 func (s *StateStreamer) removeClient(c *wsClient) {
 	s.mu.Lock()
 	delete(s.clients, c)

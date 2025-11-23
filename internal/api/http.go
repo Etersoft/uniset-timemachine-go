@@ -84,6 +84,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		handler http.Handler
 	}{
 		{"/api/v1/job", http.HandlerFunc(s.handleJob)},
+		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
 		{"/api/v2/job", http.HandlerFunc(s.handleJobV2)},
 		{"/api/v2/job/range", http.HandlerFunc(s.handleSetRange)},
 		{"/api/v2/job/seek", http.HandlerFunc(s.handleSetSeek)},
@@ -167,6 +168,21 @@ func (s *Server) handleJobV2(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// handleSensors возвращает список датчиков с именами (для подсказок в UI).
+func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var list []SensorInfo
+	if s.streamer != nil {
+		list = s.streamer.ListSensors()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sensors": list,
+	})
 }
 
 // handleSetRange сохраняет параметры диапазона без старта задачи.

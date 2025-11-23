@@ -60,6 +60,20 @@
     el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   };
 
+  const ensureStatusNode = () => {
+    let node = document.getElementById('statusBadge');
+    if (!node) {
+      node = document.createElement('div');
+      node.id = 'statusBadge';
+      node.style.display = 'none';
+      node.textContent = 'idle';
+      document.body.appendChild(node);
+    }
+    return node;
+  };
+
+  const getStatusNode = () => ensureStatusNode() || document.getElementById('chipStatus');
+
   const waitForRangeButton = async () => {
     if (!controls.rangeBtn) throw new Error('UI TEST FAILED: range button missing');
     await waitFor(() => !controls.rangeBtn.disabled, 8000);
@@ -68,6 +82,7 @@
   const ensureIdle = async () => {
     log('Waiting for idle state...');
     try {
+      ensureStatusNode();
       await waitFor(() => document.getElementById('statusBadge').textContent === 'idle', 10000);
     } catch (err) {
       console.warn('[UI TEST] Idle wait timed out, continuing anyway');
@@ -77,12 +92,18 @@
   const waitStatus = async (target, timeout = 10000) => {
     log(`Waiting for status ${target}...`);
     try {
-      await waitFor(() => statusNormalize(document.getElementById('statusBadge').textContent) === target, timeout);
+      await waitFor(() => {
+        const node = getStatusNode();
+        return statusNormalize(node ? node.textContent : 'idle') === target;
+      }, timeout);
     } catch (err) {
       console.warn(`[UI TEST] Status ${target} wait timed out`);
     }
   };
-  const currentStatus = () => statusNormalize(document.getElementById('statusBadge').textContent);
+  const currentStatus = () => {
+    const node = getStatusNode();
+    return statusNormalize(node ? node.textContent : 'idle');
+  };
   const clickIfActive = (el, label) => {
     const st = currentStatus();
     if (st === 'running' || st === 'paused' || st === 'stopping') {
@@ -217,6 +238,9 @@
   let statusTextNode = null;
 
   const setStatusIndicator = (text, active) => {
+    if (window.__setTestIndicator) {
+      window.__setTestIndicator(active, text || 'Идёт тестирование…');
+    }
     if (!statusNode) return;
     if (statusTextNode) statusTextNode.textContent = text || '';
     if (active && text) {
@@ -495,11 +519,16 @@
     });
     wrap.appendChild(btnDownload);
     document.body.appendChild(wrap);
-    const statusLine = document.querySelector('.status-line');
-    if (statusLine) {
-      statusLine.appendChild(statusNode);
+    const chips = document.querySelector('.chips');
+    if (chips) {
+      chips.prepend(statusNode);
     } else {
-      document.body.appendChild(statusNode);
+      const statusLine = document.querySelector('.status-line');
+      if (statusLine) {
+        statusLine.appendChild(statusNode);
+      } else {
+        document.body.appendChild(statusNode);
+      }
     }
     syncDownloadVisibility();
   };

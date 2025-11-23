@@ -33,6 +33,7 @@ go run ./cmd/timemachine \
 - `GET /ui/` — простой веб-интерфейс (встроенная статика).
   - API допускает CORS с `Access-Control-Allow-Origin: *`, поэтому `/ui/` можно открывать даже с `file://` или с отдельного домена; предзапросы `OPTIONS` поддерживаются.
 - `GET /api/v1/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`.
+- `/debug/pprof/*` — стандартные endpoint’ы pprof для съёма профилей (CPU/heap/trace) во время работы.
 
 ### API v2 (pending range/seek)
 

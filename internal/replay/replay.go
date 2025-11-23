@@ -475,73 +475,97 @@ func waitWhilePaused(
 	stepOnce *bool,
 	cache *stateCache,
 ) error {
+	evCh := *eventCh
+	errCh := *streamErr
+
+	handleCommand := func(cmd Command) error {
+		var respErr error
+		switch cmd.Type {
+		case CommandResume:
+			*paused = false
+		case CommandPause:
+			// already paused
+		case CommandStop:
+			respErr = ErrStopped{}
+		case CommandStepForward:
+			*stepOnce = true
+			*paused = false
+		case CommandStepBackward:
+			target := (*stepTs).Add(-params.Step)
+			if target.Before(params.From) {
+				target = params.From
+			}
+			if err := restoreState(ctx, s, params, target, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
+				respErr = err
+				break
+			}
+			evCh = *eventCh
+			errCh = *streamErr
+			notifyOnStep(ctrl, *stepID, *stepTs, 0)
+			*paused = true
+			if cmd.Apply {
+				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+					respErr = err
+				}
+			}
+		case CommandSeek:
+			if cmd.TS.IsZero() {
+				respErr = fmt.Errorf("seek: TS is required")
+				break
+			}
+			if cmd.TS.Before(params.From) || cmd.TS.After(params.To) {
+				respErr = fmt.Errorf("seek: target %s is outside range %s-%s", cmd.TS, params.From, params.To)
+				break
+			}
+			if err := restoreState(ctx, s, params, cmd.TS, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
+				respErr = err
+				break
+			}
+			evCh = *eventCh
+			errCh = *streamErr
+			notifyOnStep(ctrl, *stepID, *stepTs, 0)
+			*paused = true
+			if cmd.Apply {
+				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+					respErr = err
+				}
+			}
+		case CommandApply:
+			respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs)
+		}
+		if cmd.Resp != nil {
+			select {
+			case cmd.Resp <- respErr:
+			default:
+			}
+		}
+		return respErr
+	}
+
 	for *paused {
-		p, _ := drainEvents(*eventCh, *pending)
-		*pending = p
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case cmd := <-ctrl.Commands:
-			var respErr error
-			switch cmd.Type {
-			case CommandResume:
-				*paused = false
-			case CommandPause:
-				// stay paused
-			case CommandStop:
-				respErr = ErrStopped{}
-			case CommandStepForward:
-				*stepOnce = true
-				*paused = false
-			case CommandStepBackward:
-				target := (*stepTs).Add(-params.Step)
-				if target.Before(params.From) {
-					target = params.From
-				}
-				if err := restoreState(ctx, s, params, target, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
-					respErr = err
-					break
-				}
-				notifyOnStep(ctrl, *stepID, *stepTs, 0)
-				*paused = true
-				if cmd.Apply {
-					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
-						respErr = err
-					}
-				}
-			case CommandSeek:
-				if cmd.TS.IsZero() {
-					respErr = fmt.Errorf("seek: TS is required")
-					break
-				}
-				if cmd.TS.Before(params.From) || cmd.TS.After(params.To) {
-					respErr = fmt.Errorf("seek: target %s is outside range %s-%s", cmd.TS, params.From, params.To)
-					break
-				}
-				if err := restoreState(ctx, s, params, cmd.TS, state, stepTs, stepID, streamCancel, eventCh, streamErr, pending, cache); err != nil {
-					respErr = err
-					break
-				}
-				notifyOnStep(ctrl, *stepID, *stepTs, 0)
-				*paused = true
-				if cmd.Apply {
-					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
-						respErr = err
-					}
-				}
-			case CommandApply:
-				respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs)
+			if err := handleCommand(cmd); err != nil {
+				return err
 			}
-			if cmd.Resp != nil {
-				select {
-				case cmd.Resp <- respErr:
-				default:
-				}
+			evCh = *eventCh
+			errCh = *streamErr
+		case ev, ok := <-evCh:
+			if !ok {
+				evCh = nil
+				continue
 			}
-			if respErr != nil {
-				return respErr
+			*pending = append(*pending, ev)
+		case err, ok := <-errCh:
+			if !ok {
+				errCh = nil
+				continue
 			}
-		default:
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil

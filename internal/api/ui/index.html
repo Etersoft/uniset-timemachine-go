@@ -92,6 +92,8 @@
     .chart-legend-table th:nth-child(2), .chart-legend-table td:nth-child(2) { width: 1%; white-space: nowrap; }
     .chart-legend-table td:nth-child(2) { width: 100%; max-width: 100%; }
     .chart-legend-color { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 8px; }
+    .legend-muted { opacity: 0.4; }
+    .legend-active { opacity: 1; }
     .chart-color-input { width: 32px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
     .chart-suggest-wrap { position: relative; }
     .chart-suggest-box { position: absolute; top: 100%; left: 0; right: 0; background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; margin-top: 4px; box-shadow: 0 12px 30px rgba(0,0,0,0.4); max-height: 220px; overflow-y: auto; z-index: 5; display: none; }
@@ -108,7 +110,7 @@
     <div class="header">
       <div class="title">
         <p class="eyebrow">TimeMachine · Player · v2</p>
-        <h1>История изменения датчиков</h1>
+        <h1>История изменений датчиков</h1>
       </div>
       <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:320px;">
         <div class="status-line" style="justify-content:flex-end;">
@@ -202,7 +204,6 @@
         <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд">⏭</button>
       </div>
       <div class="row wrap" style="margin-top:10px; gap:12px; align-items:flex-end;">
-        <div class="status-item" style="min-width:140px;"><span>Status</span><div id="statusBadge">idle</div></div>
         <div style="flex:1; min-width: 240px;">
           <label for="seekManualTs">Перейти к</label>
           <div class="input-with-btn">
@@ -404,6 +405,7 @@
       lastSkip: '',
       range: { from: null, to: null },
       suggest: { items: [], active: -1 },
+      focused: null,
     };
     const sensorIndex = {
       byId: new Map(),    // id -> {id,name,textname}
@@ -669,11 +671,12 @@
         const existing = prev.get(id);
         const preserved = existing?.color;
         const color = preserved || pickChartColor(id, used, idx);
-        used.add(color.toLowerCase());
+        if (color) used.add(color.toLowerCase());
         const data = existing?.data ? existing.data.slice() : [];
         const lastValue = existing?.lastValue ?? null;
         const lastTs = existing?.lastTs ?? null;
         next.set(id, {
+          id,
           label: chartLabelByID(id),
           color,
           data,
@@ -725,7 +728,9 @@
           const val = ds.lastValue;
           const color = ds.color || '#22d3ee';
           const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
-          return `<tr><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val ?? '—'}</td><td>${ts}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
+          const muted = chartState.focused !== null && chartState.focused !== id;
+          const rowClass = muted ? 'legend-muted' : 'legend-active';
+          return `<tr data-sensor="${id}" class="${rowClass}"><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val ?? '—'}</td><td>${ts}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
         }).join('');
         els.charts.legendBody.innerHTML = rows || '<tr><td colspan="4" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
       } catch (err) {
@@ -816,6 +821,7 @@
         pointRadius: 0,
         borderWidth: 1,
         fill: !!(els.charts.fill && els.charts.fill.checked),
+        hidden: chartState.focused !== null && chartState.focused !== ds.id,
       }));
     }
 
@@ -1022,6 +1028,7 @@
         if (!chartState.datasets.has(id)) {
           const color = pickChartColor(id, usedColors, idx);
           chartState.datasets.set(id, {
+            id,
             label: chartLabelByID(id),
             color,
             data: [],
@@ -1049,6 +1056,9 @@
     function applyChartSensors(list) {
       const normalized = normalizeSensorList(list || []);
       chartState.selected = normalized;
+      if (chartState.focused !== null && !chartState.selected.includes(chartState.focused)) {
+        chartState.focused = null;
+      }
       if (els.charts.sensors) {
         els.charts.sensors.value = '';
       }
@@ -1260,7 +1270,10 @@
       const stepID = state.model.step_id ?? state.model.StepID ?? '-';
       const lastTsText = curTs ? toRFC3339(curTs) : (state.model.last_ts ?? state.model.LastTS ?? '-');
       const updates = state.model.updates_sent ?? state.model.UpdatesSent ?? '-';
-      els.status.badge.textContent = st;
+      if (els.status.badge) {
+        els.status.badge.textContent = st;
+        els.status.badge.classList.toggle('badge-done', st === 'done');
+      }
       els.chipStatus.textContent = st;
       els.status.step.textContent = stepID;
       els.status.ts.textContent = lastTsText;
@@ -1270,7 +1283,6 @@
       if (st === 'running') els.chipStatus.classList.add('status-ok');
       if (st === 'paused' || st === 'pending') els.chipStatus.classList.add('status-warn');
       if (st === 'failed') els.chipStatus.classList.add('status-err');
-      els.status.badge.classList.toggle('badge-done', st === 'done');
       if (pendingSeek && (st === 'pending' || st === 'idle')) {
         els.status.ts.textContent = pendingSeek;
       }
@@ -1344,11 +1356,10 @@
       setDisabled(els.controls.stepBack, st === 'failed' || !range.valid || !paused || atStart);
       setDisabled(els.controls.stepFwd, st === 'failed' || !range.valid || !paused || atEnd);
       setDisabled(els.controls.stop, !active);
-      // Play доступна почти всегда; в running подсвечиваем как primary (Pause).
       setDisabled(els.controls.playPause, st === 'failed');
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
-      els.controls.playPause.classList.toggle('primary', st === 'running');
+      els.controls.playPause.classList.remove('primary');
       // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
       setDisabled(els.timeline, !range.valid);
       if (els.rangeBtn) {
@@ -1523,7 +1534,20 @@
             if (!Number.isFinite(id)) return;
             const filtered = chartState.selected.filter(x => x !== id);
             applyChartSensors(filtered);
+            return;
           }
+          if (target && target.closest('input.chart-color-input')) {
+            return;
+          }
+          const row = target.closest('tr[data-sensor]');
+          if (!row) return;
+          const id = Number(row.dataset.sensor);
+          if (!Number.isFinite(id)) return;
+          chartState.focused = chartState.focused === id ? null : id;
+          if (chartState.chart) {
+            syncChartData();
+          }
+          renderLegendTable();
         });
       }
       if (els.charts.suggestBox) {

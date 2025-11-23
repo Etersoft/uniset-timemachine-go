@@ -427,6 +427,9 @@
       statusStyleInjected = true;
     }
     const wrap = document.createElement('div');
+    // cleanup any previous injected nodes if script reloaded
+    document.querySelectorAll('#ui-test-status').forEach((n) => n.remove());
+
     wrap.id = 'ui-test-runner';
     wrap.style.position = 'fixed';
     wrap.style.top = '12px';

@@ -15,7 +15,7 @@
     .title h1 { margin: 4px 0 6px; font-size: 26px; color: #f8fafc; letter-spacing: -0.01em; }
     .eyebrow { text-transform: uppercase; font-size: 12px; letter-spacing: 0.24em; color: #93c5fd; margin: 0; }
     .chips { display: flex; gap: 8px; flex-wrap: wrap; }
-    .chip { padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #e2e8f0; font-weight: 600; font-size: 13px; }
+    .chip { padding: 8px 12px; border-radius: 12px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.12); color: #e2e8f0; font-weight: 600; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
     .chip.ok { color: #10b981; border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.12); }
     .chip.warn { color: #f59e0b; border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.12); }
     .chip.err { color: #f87171; border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.12); }
@@ -32,8 +32,10 @@
     button:active:not(:disabled) { background: linear-gradient(135deg, #0284c7, #0ea5e9); box-shadow: 0 6px 18px rgba(14,165,233,0.28); }
     button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; background: #1b2535; color: #94a3b8; }
     .ghost { background: rgba(255,255,255,0.06); color: #e2e8f0; border: 1px solid #1f2937; }
+    .player button { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; border-radius: 10px; padding: 10px 14px; min-width: 74px; transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease; }
+    .player button:hover:not(:disabled) { background: #16223a; border-color: #2f3f58; }
+    .player button:disabled { opacity: 0.55; cursor: not-allowed; background: #0b1324; color: #94a3b8; }
     .play-btn { background: #111a2b; color: #e2e8f0; border: 1px solid #233143; }
-    .play-btn.primary { background: linear-gradient(135deg, #0ea5e9, #14b8a6); color: #0b1220; box-shadow: 0 10px 28px rgba(14,165,233,0.35); }
     .input-with-btn { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
     .picker-btn { width: 42px; padding: 10px 0; border-radius: 10px; border: 1px solid #233143; background: #111a2b; color: #e2e8f0; font-weight: 700; }
     .picker-btn:hover { border-color: #22d3ee; color: #22d3ee; }
@@ -112,25 +114,27 @@
         <p class="eyebrow">TimeMachine · Player · v2</p>
         <h1>История изменений датчиков</h1>
       </div>
-      <div style="display:flex; flex-direction:column; gap:6px; align-items:flex-end; min-width:320px;">
-        <div class="status-line" style="justify-content:flex-end;">
+      <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end; min-width:320px;">
+        <div class="status-line" style="justify-content:flex-end; gap:10px;">
           <div class="status-item"><span>Status</span><div id="chipStatus">idle</div></div>
           <div id="statusBadge" style="display:none;">idle</div>
           <div class="status-item"><span>Step</span><div id="statStep">-</div></div>
           <div class="status-item"><span>TS</span><div id="statTs">-</div></div>
           <div class="status-item"><span>Updates</span><div id="statUpdates">-</div></div>
         </div>
-        <div class="chips" style="justify-content:flex-end; display:flex; gap:8px; flex-wrap:wrap;">
-          <span class="chip warn">polling 1.5s</span>
-          <span class="chip">REST /api/v2/*</span>
-        </div>
       </div>
     </div>
 
-      <div class="tabs">
-        <button class="tab active" data-tab="control">Управление</button>
-        <button class="tab" data-tab="table">Датчики</button>
-        <button class="tab" data-tab="charts">Графики</button>
+      <div class="tabs" style="display:flex; justify-content:space-between; align-items:center; gap:12px;">
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button class="tab active" data-tab="control">Управление</button>
+          <button class="tab" data-tab="table">Датчики</button>
+          <button class="tab" data-tab="charts">Графики</button>
+        </div>
+        <div class="chips" style="justify-content:flex-end; display:flex; gap:10px; flex-wrap:wrap;">
+          <span class="chip warn">polling 1.5s</span>
+          <span class="chip">REST /api/v2/*</span>
+        </div>
       </div>
 
     <div id="panel-control" class="tab-panel active">

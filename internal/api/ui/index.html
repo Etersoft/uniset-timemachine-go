@@ -67,8 +67,8 @@
     table { width: 100%; border-collapse: collapse; background: #0f141a; }
     th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #1f2937; color: #e5e7eb; }
     th { position: sticky; top: 0; background: #111a24; z-index: 1; }
-    tbody tr:nth-child(odd) { background-color: #111821; }
-    tbody tr:nth-child(even) { background-color: #131c26; }
+    tbody tr:nth-child(odd) { background-color: #0e1a2c; }
+    tbody tr:nth-child(even) { background-color: #101f35; }
     tbody tr.changed { position: relative; }
     tbody tr.changed td:first-child { position: relative; }
     tbody tr.changed td:first-child::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #1c93d3; opacity: 0.9; }
@@ -83,7 +83,7 @@
     <div class="header">
       <div class="title">
         <p class="eyebrow">TimeMachine · Player</p>
-        <h1>Проигрыватель истории</h1>
+        <h1>История изменения датчиков</h1>
         <div class="chips">
           <span class="chip ok" id="chipStatus">idle</span>
           <span class="chip warn">polling 1.5s</span>
@@ -168,15 +168,15 @@
 
     <div class="card">
       <div class="player">
-        <button id="stepBackBtn" class="ghost">⏮ Шаг назад</button>
+        <button id="stepBackBtn" class="ghost" aria-label="Шаг назад">⏮</button>
         <button id="playPauseBtn" class="play-btn">▶️ Play</button>
         <button id="stopBtn" class="ghost">■ Stop</button>
-        <button id="stepFwdBtn">⏭ Шаг вперёд</button>
+        <button id="stepFwdBtn" aria-label="Шаг вперёд">⏭</button>
       </div>
       <div class="row wrap" style="margin-top:10px; gap:12px; align-items:flex-end;">
         <div class="status-item" style="min-width:140px;"><span>Status</span><div id="statusBadge">idle</div></div>
         <div style="flex:1; min-width: 240px;">
-          <label for="seekManualTs">Seek конкретное время</label>
+          <label for="seekManualTs">Перейти к</label>
           <div class="input-with-btn">
             <input id="seekManualTs" type="text" placeholder="2024-06-01T00:00:10Z">
             <button class="picker-btn" data-picker="seekManualTs" type="button">…</button>
@@ -199,14 +199,11 @@
 
     <div id="panel-table" class="tab-panel">
       <div class="card">
-        <div class="row center" style="justify-content:space-between;">
-          <h3 style="margin:0; color:#f8fafc;">SViewer — таблица значений</h3>
-          <div class="row center" style="gap:10px; flex:1; justify-content:flex-end;">
-            <span class="table-meta" id="tableMeta">—</span>
-            <input id="tableFilter" type="text" placeholder="Фильтр по имени или описанию" style="max-width:320px;">
-          </div>
+        <div class="row center" style="justify-content:space-between; gap:12px;">
+          <input id="tableFilter" type="text" placeholder="Фильтр" style="max-width:340px; flex:1;">
+          <span class="table-meta" id="tableMeta">—</span>
         </div>
-        <div class="table-wrap" style="margin-top:10px;">
+        <div class="table-wrap" style="margin-top:12px;">
           <table>
             <thead>
               <tr>

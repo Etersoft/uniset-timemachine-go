@@ -34,6 +34,14 @@ go run ./cmd/timemachine \
   - API допускает CORS с `Access-Control-Allow-Origin: *`, поэтому `/ui/` можно открывать даже с `file://` или с отдельного домена; предзапросы `OPTIONS` поддерживаются.
 - `GET /api/v1/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`.
 
+### API v2 (pending range/seek)
+
+- `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max.
+- `POST /api/v2/job/seek` — перемотка; если job не запущен, запоминает pending seek.
+- `POST /api/v2/job/start` — запустить задачу, используя pending range/seek.
+- `POST /api/v2/job/pause|resume|stop|apply|step/forward|step/backward` — команды как в v1.
+- `GET /api/v2/job` — статус + pending (`range_set`, `range`, `seek_set`, `seek_ts`).
+
 ### Старт
 
 ```bash

@@ -4,12 +4,15 @@ import (
 	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/pprof"
 	"time"
+
+	"github.com/pv/uniset-timemachine-go/internal/replay"
 )
 
 // Server реализует HTTP API управления проигрывателем.
@@ -417,6 +420,10 @@ func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {
 			return
 		}
 		if err := fn(); err != nil {
+			if errors.Is(err, replay.ErrStopped{}) {
+				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
@@ -432,6 +439,10 @@ func (s *Server) wrapSimpleWithLog(label string, fn func() error) http.HandlerFu
 		}
 		log.Printf("[http] command %s", label)
 		if err := fn(); err != nil {
+			if errors.Is(err, replay.ErrStopped{}) {
+				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+				return
+			}
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}

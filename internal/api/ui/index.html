@@ -76,6 +76,15 @@
     th.value { width: 140px; }
     .table-meta { color: #94a3b8; font-size: 13px; }
     .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid #1f2937; }
+    .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
+    .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+    .chart-controls input { max-width: 320px; }
+    .chart-meta { color: #94a3b8; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .chart-legend-wrap { max-height: 180px; overflow-y: auto; border: 1px solid #1f2937; border-radius: 10px; margin-top: 8px; }
+    .chart-legend-table { width: 100%; border-collapse: collapse; font-size: 13px; color: #e5e7eb; }
+    .chart-legend-table th, .chart-legend-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937; }
+    .chart-legend-color { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 8px; }
+    .chart-color-input { width: 32px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
   </style>
 </head>
 <body>
@@ -100,6 +109,7 @@
     <div class="tabs">
       <button class="tab active" data-tab="control">Управление</button>
       <button class="tab" data-tab="table">SViewer</button>
+      <button class="tab" data-tab="charts">Графики</button>
     </div>
 
     <div id="panel-control" class="tab-panel active">
@@ -171,7 +181,7 @@
         <button id="stepBackBtn" class="ghost" aria-label="Шаг назад">⏮</button>
         <button id="playPauseBtn" class="play-btn">▶️ Play</button>
         <button id="stopBtn" class="ghost">■ Stop</button>
-        <button id="stepFwdBtn" aria-label="Шаг вперёд">⏭</button>
+        <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд">⏭</button>
       </div>
       <div class="row wrap" style="margin-top:10px; gap:12px; align-items:flex-end;">
         <div class="status-item" style="min-width:140px;"><span>Status</span><div id="statusBadge">idle</div></div>
@@ -199,9 +209,9 @@
 
     <div id="panel-table" class="tab-panel">
       <div class="card">
-        <div class="row center" style="justify-content:space-between; gap:12px;">
-          <input id="tableFilter" type="text" placeholder="Фильтр" style="max-width:340px; flex:1;">
-          <span class="table-meta" id="tableMeta">—</span>
+        <div class="row center" style="justify-content:flex-start; gap:12px; flex-wrap:wrap;">
+          <input id="tableFilter" type="text" placeholder="Фильтр" style="max-width:340px; flex:0 0 auto;">
+          <span class="table-meta" id="tableMeta" style="min-width:160px;">—</span>
         </div>
         <div class="table-wrap" style="margin-top:12px;">
           <table>
@@ -214,6 +224,43 @@
             </thead>
             <tbody id="tableBody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="panel-charts" class="tab-panel">
+      <div class="card">
+        <div class="chart-controls">
+          <div style="flex:1; min-width:260px;">
+            <label for="chartSensors">Добавить датчик (id или name, Enter добавляет)</label>
+            <input id="chartSensors" type="text" placeholder="Sensor10001_S" list="chartSensorsSuggestions" autocomplete="off">
+            <datalist id="chartSensorsSuggestions"></datalist>
+          </div>
+          <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+            <button id="chartApplyBtn" class="ghost" type="button">Обновить график</button>
+            <button id="chartClearBtn" class="ghost" type="button">Очистить</button>
+            <button id="chartResetBtn" class="ghost" type="button">Reset zoom</button>
+            <button id="chartAutoZoomBtn" class="ghost" type="button">Autozoom Y</button>
+            <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px;">
+              <input id="chartAutoUpdate" type="checkbox" checked style="width:auto; margin:0;">
+              Автообновление
+            </label>
+            <div style="display:flex; align-items:center; gap:6px;">
+              <label for="chartWindow" style="margin:0; color:#94a3b8;">Окно, сек:</label>
+              <input id="chartWindow" type="number" value="300" min="0" step="10" style="width:90px; padding:8px;">
+            </div>
+          </div>
+          <div class="chart-meta" id="chartMeta">Нет данных</div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chartCanvas" style="width:100%; min-height:360px;"></canvas>
+          <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
+          <div class="chart-legend-wrap">
+            <table class="chart-legend-table" id="chartLegendTable">
+              <thead><tr><th>Сенсор</th><th>Текущее значение</th></tr></thead>
+              <tbody id="chartLegendBody"></tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
@@ -231,6 +278,7 @@
     </form>
   </dialog>
 
+  <script src="/ui/uPlot.iife.min.js"></script>
   <script>
     const logUI = (msg) => console.info(`[UI LOG] ${msg}`);
     const els = {
@@ -245,6 +293,7 @@
       panels: {
         control: document.getElementById('panel-control'),
         table: document.getElementById('panel-table'),
+        charts: document.getElementById('panel-charts'),
       },
       startErrors: document.getElementById('startErrors'),
       chipStatus: document.getElementById('chipStatus'),
@@ -279,6 +328,20 @@
         filter: document.getElementById('tableFilter'),
         meta: document.getElementById('tableMeta'),
       },
+      charts: {
+        sensors: document.getElementById('chartSensors'),
+        apply: document.getElementById('chartApplyBtn'),
+        clear: document.getElementById('chartClearBtn'),
+        meta: document.getElementById('chartMeta'),
+        reset: document.getElementById('chartResetBtn'),
+        empty: document.getElementById('chartEmpty'),
+        suggestions: document.getElementById('chartSensorsSuggestions'),
+        canvas: document.getElementById('chartCanvas'),
+        legendBody: document.getElementById('chartLegendBody'),
+        autozoom: document.getElementById('chartAutoZoomBtn'),
+        autoUpdate: document.getElementById('chartAutoUpdate'),
+        window: document.getElementById('chartWindow'),
+      },
       rangeBtn: document.getElementById('rangeBtn'),
     };
     const inputs = els.inputs;
@@ -290,6 +353,7 @@
       ws: null,
       reconnectIn: null,
       previewTs: null,
+      lastParamsSig: '',
     };
 
     const tableState = {
@@ -298,6 +362,15 @@
       filter: '',
       lastStep: '-',
       lastTs: '-',
+    };
+    const chartState = {
+      selected: [],
+      datasets: new Map(), // id -> {label,color,data: [{x,y}], lastValue}
+      chart: null,
+      maxPoints: 800,
+      autoUpdate: true,
+      windowSec: 300,
+      lastParamsSig: '',
     };
 
     function log(message, ok = true) {
@@ -316,6 +389,9 @@
         if (!node) return;
         node.classList.toggle('active', name === tab);
       });
+      if (tab === 'charts') {
+        redrawChart();
+      }
     }
 
     function connectWS() {
@@ -369,9 +445,11 @@
           break;
         case 'snapshot':
           applySnapshot(msg.updates || [], tsStr);
+          appendChartPoint(tsStr, msg.updates || []);
           break;
         case 'updates':
           applyTableUpdates(msg.updates || [], tsStr);
+          appendChartPoint(tsStr, msg.updates || []);
           break;
         default:
           break;
@@ -401,6 +479,7 @@
           });
         }
       });
+      refreshChartSuggestions();
     }
 
     function applyTableUpdates(list, tsStr) {
@@ -451,6 +530,283 @@
       if (els.table.meta) {
         const ts = tableState.lastTs || '—';
         els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts}`;
+      }
+    }
+
+    const chartColors = ['#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#a78bfa', '#f87171', '#4ade80', '#60a5fa'];
+
+    function chartLabelByID(id) {
+      const meta = tableState.meta.get(id) || {};
+      if (meta.name) return `${meta.name} (${id})`;
+      return `id${id}`;
+    }
+
+    function parseChartSensors(input) {
+      if (!input) return [];
+      const tokens = input.split(',').map(t => t.trim()).filter(Boolean);
+      if (!tokens.length) return [];
+      const byName = new Map();
+      tableState.meta.forEach((meta, id) => {
+        if (meta?.name) byName.set(String(meta.name).toLowerCase(), id);
+      });
+      const out = [];
+      tokens.forEach(tok => {
+        const num = Number(tok);
+        if (Number.isFinite(num)) {
+          out.push(num);
+          return;
+        }
+        const found = byName.get(tok.toLowerCase());
+        if (found) out.push(found);
+      });
+      return Array.from(new Set(out));
+    }
+
+    function rebuildChartSeries() {
+      chartState.datasets = new Map();
+      chartState.selected.forEach((id, idx) => {
+        chartState.datasets.set(id, {
+          label: chartLabelByID(id),
+          color: chartColors[idx % chartColors.length],
+          data: [],
+          lastValue: null,
+        });
+      });
+      rebuildChart();
+    }
+
+    function updateChartMeta(msg) {
+      if (!els.charts.meta) return;
+      const sensors = chartState.selected.length ? chartState.selected.map(chartLabelByID).join(', ') : '—';
+      const points = chartState.chart ? (chartState.chart.data.labels?.length || 0) : 0;
+      els.charts.meta.textContent = chartState.chart ? `Сенсоры: ${sensors} · Точек: ${points}` : 'Нет данных';
+      if (msg) {
+        els.charts.meta.textContent += ` · ${msg}`;
+      }
+      if (els.charts.empty) {
+        const showEmpty = !chartState.selected.length || points === 0;
+        els.charts.empty.style.display = showEmpty ? 'flex' : 'none';
+      }
+      if (els.charts.autoUpdate) {
+        els.charts.autoUpdate.checked = chartState.autoUpdate;
+      }
+      if (els.charts.window) {
+        els.charts.window.value = chartState.windowSec;
+      }
+    }
+
+    function refreshChartSuggestions() {
+      if (!els.charts.suggestions) return;
+      const opts = [];
+      tableState.meta.forEach((meta, id) => {
+        const label = meta?.name ? `${meta.name}` : `id${id}`;
+        opts.push({value: meta?.name || String(id), label: `${label} (${id})`});
+      });
+      const limited = opts.slice(0, 200);
+      els.charts.suggestions.innerHTML = limited.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+    }
+
+    function rebuildChart() {
+      if (!els.charts.canvas) return;
+      if (!chartState.selected.length) {
+        if (chartState.chart) {
+          chartState.chart.destroy();
+          chartState.chart = null;
+        }
+        updateChartMeta();
+        renderLegendTable();
+        return;
+      }
+      const ctx = els.charts.canvas.getContext('2d');
+      const labels = extractChartLabels();
+      const datasets = Array.from(chartState.datasets.values()).map(ds => ({
+        label: ds.label,
+        data: ds.data,
+        borderColor: ds.color || '#22d3ee',
+        backgroundColor: ds.color || '#22d3ee',
+        tension: 0.1,
+        spanGaps: true,
+        pointRadius: 0,
+      }));
+      if (chartState.chart) {
+        chartState.chart.data.labels = labels;
+        chartState.chart.data.datasets = datasets;
+        chartState.chart.update('none');
+      } else {
+        chartState.chart = new Chart(ctx, {
+          type: 'line',
+          data: {labels, datasets},
+          options: {
+            animation: false,
+            responsive: true,
+            maintainAspectRatio: false,
+            parsing: false,
+            scales: {
+              x: {
+                type: 'time',
+                time: {unit: 'second'},
+                ticks: {color: '#94a3b8'},
+                grid: {color: 'rgba(255,255,255,0.05)'},
+              },
+              y: {
+                ticks: {color: '#94a3b8'},
+                grid: {color: 'rgba(255,255,255,0.05)'},
+              },
+            },
+            plugins: {
+              legend: {display: false},
+              tooltip: {
+                mode: 'nearest',
+                intersect: false,
+                callbacks: {
+                  title: (items) => items.length ? new Date(items[0].parsed.x).toISOString() : '',
+                  label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}`,
+                },
+              },
+              zoom: {
+                zoom: {
+                  wheel: {enabled: true},
+                  pinch: {enabled: true},
+                  mode: 'x',
+                },
+                pan: {
+                  enabled: true,
+                  mode: 'x',
+                },
+              },
+            },
+            interaction: {mode: 'nearest', intersect: false},
+          },
+        });
+      }
+      updateChartMeta();
+      renderLegendTable();
+    }
+
+    function extractChartLabels() {
+      const labels = new Set();
+      chartState.datasets.forEach(ds => {
+        (ds.data || []).forEach(p => labels.add(p.x));
+      });
+      return Array.from(labels).sort((a, b) => a - b);
+    }
+
+    function resetChartZoom() {
+      if (!chartState.chart) return;
+      chartState.chart.resetZoom();
+      updateChartMeta();
+    }
+
+    function autoZoomY() {
+      if (!chartState.chart) return;
+      let minY = Infinity;
+      let maxY = -Infinity;
+      chartState.datasets.forEach(ds => {
+        (ds.data || []).forEach(p => {
+          if (p.y == null) return;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        });
+      });
+      if (!Number.isFinite(minY) || !Number.isFinite(maxY)) {
+        minY = 0; maxY = 1;
+      }
+      chartState.chart.options.scales.y.min = minY;
+      chartState.chart.options.scales.y.max = maxY;
+      chartState.chart.update('none');
+      updateChartMeta();
+    }
+
+    function trimDataset(ds, currentTs) {
+      if (!chartState.windowSec || chartState.windowSec <= 0) return;
+      const threshold = currentTs - chartState.windowSec * 1000;
+      ds.data = ds.data.filter(p => p.x >= threshold);
+    }
+
+    function appendChartPoint(tsStr, updates) {
+      if (!chartState.selected.length || !tsStr) return;
+      if (els.charts.autoUpdate && !els.charts.autoUpdate.checked) return;
+      const d = parseISO(tsStr);
+      if (!d) return;
+      const t = d.getTime();
+      const updateMap = new Map();
+      (updates || []).forEach(item => {
+        const id = Number(item.id);
+        if (Number.isFinite(id)) updateMap.set(id, item.value);
+      });
+      chartState.selected.forEach((id, idx) => {
+        if (!chartState.datasets.has(id)) {
+          chartState.datasets.set(id, {
+            label: chartLabelByID(id),
+            borderColor: chartColors[idx % chartColors.length],
+            backgroundColor: chartColors[idx % chartColors.length],
+            tension: 0.1,
+            spanGaps: true,
+            data: [],
+            pointRadius: 0,
+            lastValue: null,
+          });
+        }
+        const ds = chartState.datasets.get(id);
+        const val = updateMap.has(id) ? updateMap.get(id) : ds.lastValue;
+        ds.lastValue = val;
+        ds.data.push({x: t, y: val});
+        if (ds.data.length > chartState.maxPoints) ds.data.shift();
+        trimDataset(ds, t);
+      });
+      rebuildChart();
+    }
+
+    function applyChartSensors(list) {
+      chartState.selected = list || [];
+      if (els.charts.sensors) {
+        els.charts.sensors.value = '';
+      }
+      rebuildChartSeries();
+    }
+
+    function clearChart() {
+      chartState.selected = [];
+      chartState.datasets = new Map();
+      rebuildChart();
+      if (els.charts.sensors) els.charts.sensors.value = '';
+    }
+
+    function addSensorsFromInput() {
+      const raw = els.charts.sensors?.value || '';
+      const ids = parseChartSensors(raw);
+      if (!ids.length) return;
+      const merged = Array.from(new Set([...chartState.selected, ...ids]));
+      applyChartSensors(merged);
+    }
+
+    function hydrateChartDefaultsFromParams() {
+      if (chartState.selected.length) return;
+      const params = state.model.params || state.model.Params || {};
+      const sensors = params.Sensors || params.sensors;
+      if (Array.isArray(sensors) && sensors.length) {
+        applyChartSensors(sensors);
+      }
+    }
+
+    function paramsSignature(params) {
+      if (!params) return '';
+      const sensors = params.Sensors || params.sensors || [];
+      const from = params.From || params.from;
+      const to = params.To || params.to;
+      return JSON.stringify({sensors, from, to});
+    }
+
+    function syncChartWithParams(params) {
+      const sig = paramsSignature(params);
+      if (sig && sig !== chartState.lastParamsSig) {
+        chartState.lastParamsSig = sig;
+        const sensors = params?.Sensors || params?.sensors;
+        if (Array.isArray(sensors) && sensors.length) {
+          applyChartSensors(sensors);
+        } else {
+          clearChart();
+        }
       }
     }
 
@@ -560,6 +916,7 @@
       updateTimeline();
       updateControls();
       logIndicators(st);
+      updateChartMeta();
     }
 
     function logIndicators(status) {
@@ -612,9 +969,10 @@
       const paused = st === 'paused';
       const curTs = currentTsFromServer();
       const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
+      const atEnd = !range.valid || !curTs || curTs.getTime() >= range.to.getTime();
 
       setDisabled(els.controls.stepBack, st === 'failed' || !range.valid || !paused || atStart);
-      setDisabled(els.controls.stepFwd, st === 'failed' || !range.valid || !paused);
+      setDisabled(els.controls.stepFwd, st === 'failed' || !range.valid || !paused || atEnd);
       setDisabled(els.controls.stop, !active);
       // Play доступна почти всегда; в running подсвечиваем как primary (Pause).
       setDisabled(els.controls.playPause, st === 'failed');
@@ -682,6 +1040,8 @@
         state.model.params = pendingRange;
         state.model.Params = pendingRange;
       }
+      hydrateChartDefaultsFromParams();
+      syncChartWithParams(state.model.params || state.model.Params);
       logUI(`refresh result status=${status} last_ts=${state.model.last_ts || state.model.LastTS} pendingRange=${pendingRange ? 'yes' : 'no'}`);
       updateStatusView();
     }
@@ -757,6 +1117,55 @@
       }
       if (els.controls.jumpEnd) {
         els.controls.jumpEnd.addEventListener('click', () => jumpToEdge('end'));
+      }
+      if (els.charts.apply) {
+        els.charts.apply.addEventListener('click', () => {
+          addSensorsFromInput();
+        });
+      }
+      if (els.charts.clear) {
+        els.charts.clear.addEventListener('click', () => clearChart());
+      }
+      if (els.charts.reset) {
+        els.charts.reset.addEventListener('click', () => resetChartZoom());
+      }
+      if (els.charts.autozoom) {
+        els.charts.autozoom.addEventListener('click', () => autoZoomY());
+      }
+      if (els.charts.autoUpdate) {
+        els.charts.autoUpdate.addEventListener('change', () => {
+          chartState.autoUpdate = !!els.charts.autoUpdate.checked;
+          updateChartMeta();
+        });
+      }
+      if (els.charts.legendBody) {
+        els.charts.legendBody.addEventListener('input', (e) => {
+          const target = e.target;
+          if (target && target.matches('input.chart-color-input')) {
+            const id = Number(target.dataset.sensor);
+            if (!Number.isFinite(id)) return;
+            const color = target.value || '#22d3ee';
+            if (!chartState.datasets.has(id)) return;
+            const ds = chartState.datasets.get(id);
+            ds.color = color;
+            rebuildChart();
+          }
+        });
+      }
+      if (els.charts.window) {
+        els.charts.window.addEventListener('change', () => {
+          const v = Number(els.charts.window.value);
+          if (!Number.isFinite(v) || v < 0) return;
+          chartState.windowSec = v;
+        });
+      }
+      if (els.charts.sensors) {
+        els.charts.sensors.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            addSensorsFromInput();
+          }
+        });
       }
     }
 
@@ -903,6 +1312,7 @@
     startPolling();
     connectWS();
     renderTable(true);
+    updateChartMeta();
 
     if (new URLSearchParams(location.search).get('test') === '1') {
       const script = document.createElement('script');
@@ -935,3 +1345,13 @@
   </script>
 </body>
 </html>
+    function renderLegendTable() {
+      if (!els.charts.legendBody) return;
+      const rows = chartState.selected.map((id) => {
+        const ds = chartState.datasets.get(id) || {};
+        const val = ds.lastValue;
+        const color = ds.color || '#22d3ee';
+        return `<tr><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}"><span class="chart-legend-color" style="background:${color}"></span>${chartLabelByID(id)}</td><td>${val ?? '—'}</td></tr>`;
+      }).join('');
+      els.charts.legendBody.innerHTML = rows || '<tr><td colspan="2" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
+    }

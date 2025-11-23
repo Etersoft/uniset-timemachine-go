@@ -1,5 +1,17 @@
 (() => {
-  const log = (msg) => console.log(`[UI TEST] ${msg}`);
+  const testLogEntries = [];
+  let consoleBackup = null;
+  let consoleHooked = false;
+
+  const pushLog = (msg) => {
+    const entry = { ts: new Date().toISOString(), msg };
+    testLogEntries.push(entry);
+  };
+
+  const log = (msg) => {
+    pushLog(msg);
+    console.log(`[UI TEST] ${msg}`);
+  };
   const assert = (condition, msg) => {
     if (!condition) {
       throw new Error(`UI TEST FAILED: ${msg}`);
@@ -117,6 +129,7 @@
       await waitFor(() => inputs.from.value !== '' && inputs.to.value !== '', 2000);
       setRange(inputs.from.value, inputs.to.value);
       await sleep(500);
+      await seekFraction(0);
       log('Seeking mid range');
       controls.timeline.value = 500;
       controls.timeline.dispatchEvent(new Event('input'));
@@ -162,6 +175,7 @@
       await waitForRangeButton();
       click(controls.rangeBtn);
       await waitStatusIn(['pending', 'paused', 'idle'], 8000);
+      await seekFraction(0);
 
       // Готовим параметры: чуть замедлить, чтобы успеть поставить паузу.
       inputs.speed.value = '0.5';
@@ -197,8 +211,197 @@
   window.__timemachineUITest = run;
   window.__timemachineUIFlowTest = runFlow;
   log('UI test helper ready: call `window.__timemachineUITest()`');
+
+  let statusNode = null;
+  let statusStyleInjected = false;
+  let statusTextNode = null;
+
+  const setStatusIndicator = (text, active) => {
+    if (!statusNode) return;
+    if (statusTextNode) statusTextNode.textContent = text || '';
+    if (active && text) {
+      statusNode.classList.add('active');
+      statusNode.style.opacity = '1';
+    } else {
+      statusNode.classList.remove('active');
+      statusNode.style.opacity = '0';
+      if (statusTextNode) statusTextNode.textContent = '';
+    }
+  };
+
+  const snapshotTimeline = () => {
+    const slider = document.getElementById('timeline');
+    const current = document.getElementById('currentLabel');
+    return {
+      value: slider ? slider.value : null,
+      label: current ? current.textContent : null,
+      previewTs: state.previewTs,
+    };
+  };
+
+  const restoreTimeline = (snap) => {
+    if (!snap) return;
+    const slider = document.getElementById('timeline');
+    const current = document.getElementById('currentLabel');
+    state.previewTs = snap.previewTs || null;
+    if (slider && snap.value !== null && snap.value !== undefined) {
+      slider.value = snap.value;
+      slider.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    if (current && snap.label) {
+      current.textContent = snap.label;
+    }
+  };
+
+  const collectUILog = () => {
+    const logEl = document.getElementById('log');
+    if (!logEl) return [];
+    return Array.from(logEl.querySelectorAll('.log-entry')).map((el) => el.textContent.trim()).filter(Boolean);
+  };
+
+  const saveLogsToStorage = (errorMessage, status = 'ok') => {
+    try {
+      const payload = {
+        saved_at: new Date().toISOString(),
+        status,
+        error: errorMessage || null,
+        entries: testLogEntries.slice(),
+        uiLog: collectUILog(),
+      };
+      localStorage.setItem('tm-ui-test-log', JSON.stringify(payload));
+      log('Лог теста сохранён в localStorage (tm-ui-test-log)');
+    } catch (err) {
+      console.error('[UI TEST] saveLogsToStorage failed', err);
+    }
+  };
+
+  const downloadStoredLogs = () => {
+    try {
+      const raw = localStorage.getItem('tm-ui-test-log');
+      if (!raw) {
+        log('Нет сохранённых логов для скачивания');
+        return;
+      }
+      const data = JSON.parse(raw);
+      const pretty = JSON.stringify(data, null, 2);
+      const blob = new Blob([pretty], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'tm-ui-test-log.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 0);
+      log('Сохранённый лог скачан');
+    } catch (err) {
+      pushLog(`DOWNLOAD ERROR: ${err?.message || err}`);
+      console.error('[UI TEST] downloadStoredLogs failed', err);
+    }
+  };
+
+  const syncDownloadVisibility = () => {
+    const raw = localStorage.getItem('tm-ui-test-log');
+    const btn = document.getElementById('ui-test-download');
+    if (!btn) return;
+    btn.style.display = raw ? 'inline-block' : 'none';
+  };
+
+  // Форсируем появление индикатора даже при быстрых нажатиях.
+  const showIndicatorImmediately = (text) => {
+    setStatusIndicator(text, true);
+    requestAnimationFrame(() => setStatusIndicator(text, true));
+    setTimeout(() => setStatusIndicator(text, true), 50);
+  };
+
+  const hookConsole = () => {
+    if (consoleHooked) return;
+    consoleHooked = true;
+    consoleBackup = {
+      log: console.log,
+      info: console.info,
+      warn: console.warn,
+      error: console.error,
+    };
+    const wrap = (level) => (...args) => {
+      pushLog(`${level.toUpperCase()}: ${args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ')}`);
+      if (consoleBackup && consoleBackup[level]) {
+        consoleBackup[level](...args);
+      }
+    };
+    console.log = wrap('log');
+    console.info = wrap('info');
+    console.warn = wrap('warn');
+    console.error = wrap('error');
+  };
+
+  const restoreConsole = () => {
+    if (!consoleHooked || !consoleBackup) return;
+    console.log = consoleBackup.log;
+    console.info = consoleBackup.info;
+    console.warn = consoleBackup.warn;
+    console.error = consoleBackup.error;
+    consoleHooked = false;
+    consoleBackup = null;
+  };
+
+  const runLocked = (btn, fn, label) => {
+    if (!btn || btn.disabled) return;
+    const savedTimeline = snapshotTimeline();
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.style.opacity = '0.6';
+    btn.textContent = label || original;
+    showIndicatorImmediately('Идёт тестирование…');
+    hookConsole();
+    (async () => {
+      try {
+        await fn();
+        saveLogsToStorage(null, 'ok');
+        syncDownloadVisibility();
+      } catch (err) {
+        pushLog(`ERROR: ${err?.message || err}`);
+        console.error(err);
+        saveLogsToStorage(err?.message || String(err), 'error');
+      } finally {
+        try {
+          await ensureStopped();
+        } catch (stopErr) {
+          pushLog(`STOP ERROR: ${stopErr?.message || stopErr}`);
+          console.error(stopErr);
+        }
+        restoreTimeline(savedTimeline);
+        restoreConsole();
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.textContent = original;
+        setStatusIndicator('', false);
+        syncDownloadVisibility();
+      }
+    })();
+  };
+
   const createTestBtn = () => {
     if (document.getElementById('ui-test-runner')) return;
+    if (!statusStyleInjected) {
+      const style = document.createElement('style');
+      style.textContent = `
+        @keyframes tm-test-pulse {
+          0% { box-shadow: 0 0 0 0 rgba(52,211,153,0.35); }
+          100% { box-shadow: 0 0 0 10px rgba(52,211,153,0); }
+        }
+        #ui-test-status.active {
+          background: linear-gradient(135deg, rgba(16,185,129,0.9), rgba(5,150,105,0.9));
+          color: #0b1220;
+          border: 1px solid rgba(16,185,129,0.6);
+          animation: tm-test-pulse 1s ease-in-out infinite;
+        }
+      `;
+      document.head.appendChild(style);
+      statusStyleInjected = true;
+    }
     const wrap = document.createElement('div');
     wrap.id = 'ui-test-runner';
     wrap.style.position = 'fixed';
@@ -208,6 +411,34 @@
     wrap.style.display = 'flex';
     wrap.style.flexDirection = 'column';
     wrap.style.gap = '8px';
+
+    statusNode = document.createElement('div');
+    statusNode.id = 'ui-test-status';
+    statusNode.style.display = 'inline-flex';
+    statusNode.style.alignItems = 'center';
+    statusNode.style.gap = '8px';
+    statusNode.style.padding = '10px 14px';
+    statusNode.style.borderRadius = '12px';
+    statusNode.style.background = 'rgba(17,24,39,0.9)';
+    statusNode.style.color = '#34d399';
+    statusNode.style.border = '1px solid rgba(52,211,153,0.5)';
+    statusNode.style.fontWeight = '700';
+    statusNode.style.boxShadow = '0 12px 30px rgba(0,0,0,0.35)';
+    statusNode.style.transition = 'opacity 0.2s ease';
+    statusNode.style.opacity = '0';
+    statusNode.style.marginLeft = '12px';
+    statusNode.style.whiteSpace = 'nowrap';
+    const dot = document.createElement('span');
+    dot.style.display = 'block';
+    dot.style.width = '10px';
+    dot.style.height = '10px';
+    dot.style.borderRadius = '50%';
+    dot.style.background = '#22c55e';
+    dot.style.boxShadow = '0 0 0 6px rgba(34,197,94,0.2)';
+    statusTextNode = document.createElement('span');
+    statusTextNode.id = 'ui-test-status-text';
+    statusNode.appendChild(dot);
+    statusNode.appendChild(statusTextNode);
 
     const btn = document.createElement('button');
     btn.textContent = 'Запустить smoke';
@@ -221,7 +452,7 @@
     btn.style.boxShadow = '0 8px 24px rgba(14,165,233,0.3)';
     btn.addEventListener('click', () => {
       log('Запуск UI smoke теста по кнопке');
-      run();
+      runLocked(btn, run, 'Выполняется…');
     });
 
     const btnFlow = document.createElement('button');
@@ -236,12 +467,41 @@
     btnFlow.style.boxShadow = '0 8px 24px rgba(34,211,238,0.35)';
     btnFlow.addEventListener('click', () => {
       log('Запуск UI flow теста по кнопке');
-      runFlow();
+      runLocked(btnFlow, runFlow, 'Выполняется…');
     });
 
     wrap.appendChild(btn);
     wrap.appendChild(btnFlow);
+    const btnDownload = document.createElement('button');
+    btnDownload.id = 'ui-test-download';
+    btnDownload.textContent = 'Скачать лог';
+    btnDownload.style.padding = '10px 14px';
+    btnDownload.style.borderRadius = '12px';
+    btnDownload.style.border = 'none';
+    btnDownload.style.background = '#0f172a';
+    btnDownload.style.color = '#e2e8f0';
+    btnDownload.style.fontWeight = '700';
+    btnDownload.style.cursor = 'pointer';
+    btnDownload.style.boxShadow = '0 8px 24px rgba(15,23,42,0.3)';
+    btnDownload.addEventListener('click', () => {
+      log('Кнопка скачивания лога нажата');
+      try {
+        downloadStoredLogs();
+      } catch (err) {
+        pushLog(`DOWNLOAD BUTTON ERROR: ${err?.message || err}`);
+        console.error(err);
+      }
+      syncDownloadVisibility();
+    });
+    wrap.appendChild(btnDownload);
     document.body.appendChild(wrap);
+    const statusLine = document.querySelector('.status-line');
+    if (statusLine) {
+      statusLine.appendChild(statusNode);
+    } else {
+      document.body.appendChild(statusNode);
+    }
+    syncDownloadVisibility();
   };
   createTestBtn();
 

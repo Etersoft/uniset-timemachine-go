@@ -261,7 +261,12 @@ func (m *Manager) Stop() error {
 
 // StepForward выполняет один шаг вперёд из паузы.
 func (m *Manager) StepForward() error {
-	return m.sendCommand(replay.Command{Type: replay.CommandStepForward})
+	if err := m.sendCommand(replay.Command{Type: replay.CommandStepForward}); err != nil {
+		return err
+	}
+	// После единичного шага остаёмся в paused, чтобы пользователь мог двигаться дальше вручную.
+	m.setStatus("paused")
+	return nil
 }
 
 // StepBackward выполняет один шаг назад из паузы (без промежуточных отправок).

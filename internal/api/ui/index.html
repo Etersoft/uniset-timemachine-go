@@ -270,6 +270,16 @@
               <input id="chartFill" type="checkbox" checked style="width:auto; margin:0;">
               Фон
             </label>
+            <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px; display:flex; gap:6px; align-items:center;">
+              Точность
+              <select id="chartPrecision" style="background:#0b1324; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
           </div>
           <div class="chart-meta" id="chartMeta">Нет данных</div>
         </div>
@@ -280,7 +290,7 @@
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
           <div class="chart-legend-wrap">
             <table class="chart-legend-table" id="chartLegendTable">
-              <thead><tr><th>Датчик</th><th>Текущее значение</th><th>Время</th><th></th></tr></thead>
+              <thead><tr><th>Датчик</th><th>Значение</th><th>Время</th><th>Текст</th><th></th></tr></thead>
               <tbody id="chartLegendBody"></tbody>
             </table>
           </div>
@@ -378,6 +388,7 @@
         legendBody: document.getElementById('chartLegendBody'),
         fill: document.getElementById('chartFill'),
         autoUpdate: document.getElementById('chartAutoUpdate'),
+        precision: document.getElementById('chartPrecision'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
     };
@@ -393,7 +404,7 @@
       els.status.badge = badge;
     }
 
-    const state = {
+  const state = {
       model: { status: 'idle' },
       pollingMs: 1500,
       pollErrorNotified: false,
@@ -413,7 +424,7 @@
       }
     };
 
-    const tableState = {
+  const tableState = {
       rows: new Map(),
       meta: new Map(),
       filter: '',
@@ -433,13 +444,22 @@
       suggest: { items: [], active: -1 },
       focused: null,
     };
-    const sensorIndex = {
+  const sensorIndex = {
       byId: new Map(),    // id -> {id,name,textname}
       byName: new Map(),  // lower(name) -> id
       hydrated: false,
     };
 
-    function log(message, ok = true) {
+  let chartValuePrecision = 3;
+
+  function formatChartValue(v) {
+    if (v === null || v === undefined) return '—';
+    const num = Number(v);
+    if (!Number.isFinite(num)) return '—';
+    return num.toFixed(chartValuePrecision);
+  }
+
+  function log(message, ok = true) {
       const row = document.createElement('div');
       row.className = `log-entry ${ok ? 'ok' : 'err'}`;
       row.innerHTML = `<div class="ts">${new Date().toLocaleTimeString()}</div><div>${message}</div>`;
@@ -751,16 +771,17 @@
       try {
         const rows = chartState.selected.map((id) => {
           const ds = chartState.datasets.get(id) || {};
-          const val = ds.lastValue;
+          const val = formatChartValue(ds.lastValue);
           const color = ds.color || '#22d3ee';
           const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
+          const text = sensorTextNameByID(id) || '—';
           const muted = chartState.focused !== null && chartState.focused !== id;
           const rowClass = muted ? 'legend-muted' : 'legend-active';
-          return `<tr data-sensor="${id}" class="${rowClass}"><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val ?? '—'}</td><td>${ts}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
+          return `<tr data-sensor="${id}" class="${rowClass}"><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val}</td><td>${ts}</td><td>${text}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
         }).join('');
-        els.charts.legendBody.innerHTML = rows || '<tr><td colspan="4" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
+        els.charts.legendBody.innerHTML = rows || '<tr><td colspan="5" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
       } catch (err) {
-        els.charts.legendBody.innerHTML = `<tr><td colspan="4" style="color:#f87171;">${err?.message || err}</td></tr>`;
+        els.charts.legendBody.innerHTML = `<tr><td colspan="5" style="color:#f87171;">${err?.message || err}</td></tr>`;
       }
     }
 
@@ -1626,6 +1647,14 @@
       }
       if (els.charts.fill) {
         els.charts.fill.addEventListener('change', () => syncChartData());
+      }
+      if (els.charts.precision) {
+        els.charts.precision.addEventListener('change', () => {
+          const v = Number(els.charts.precision.value);
+          chartValuePrecision = Number.isFinite(v) ? v : 3;
+          renderLegendTable();
+          syncChartData();
+        });
       }
     }
 

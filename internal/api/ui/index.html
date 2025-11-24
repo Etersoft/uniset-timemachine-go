@@ -91,9 +91,14 @@
     .chart-legend-wrap { max-height: 180px; overflow-y: auto; border: 1px solid #1f2937; border-radius: 10px; margin-top: 8px; }
     .chart-legend-table { width: 100%; border-collapse: collapse; font-size: 13px; color: #e5e7eb; }
     .chart-legend-table th, .chart-legend-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937; }
-    .chart-legend-table th:nth-child(2), .chart-legend-table td:nth-child(2) { width: 1%; white-space: nowrap; }
-    .chart-legend-table td:nth-child(2) { width: 100%; max-width: 100%; }
-    .chart-legend-color { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 8px; }
+    .chart-legend-table th:nth-child(1), .chart-legend-table td:nth-child(1) { width: 32px; text-align: center; }
+    .chart-legend-table th:nth-child(2), .chart-legend-table td:nth-child(2) { width: 20%; }
+    .chart-legend-table th:nth-child(3), .chart-legend-table td:nth-child(3) { width: 25%; }
+    .chart-legend-table th:nth-child(4), .chart-legend-table td:nth-child(4) { width: 20%; }
+    .chart-legend-table th:nth-child(5), .chart-legend-table td:nth-child(5) { width: auto; }
+    .chart-legend-table th:nth-child(6), .chart-legend-table td:nth-child(6) { text-align: right; width: 60px; }
+    .chart-legend-color { width: 14px; height: 14px; border-radius: 50%; display: inline-block; border: 1px solid #1f2937; }
+    .chart-color-btn { width: 14px; height: 14px; border-radius: 50%; border: 1px solid #334155; background: #22d3ee; padding: 0; cursor: pointer; }
     .legend-muted { opacity: 0.4; }
     .legend-active { opacity: 1; }
     .chart-color-input { width: 32px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
@@ -145,20 +150,12 @@
 
     <div id="panel-control" class="tab-panel active">
     <div class="card">
-      <div class="row wrap">
-        <div style="flex:2; min-width: 260px;">
-          <label for="from">From</label>
-          <div class="input-with-btn">
-            <input id="from" type="text" placeholder="2024-06-01T00:00:00Z">
-            <button class="picker-btn" data-picker="from" type="button">…</button>
-          </div>
-        </div>
-        <div style="flex:2; min-width: 260px;">
-          <label for="to">To</label>
-          <div class="input-with-btn">
-            <input id="to" type="text" placeholder="2024-06-01T01:00:00Z">
-            <button class="picker-btn" data-picker="to" type="button">…</button>
-          </div>
+      <div class="row wrap" style="gap:12px; align-items:flex-end;">
+        <div style="flex:2; min-width: 320px;">
+          <label>Диапазон</label>
+          <button id="rangePickerBtn" class="ghost" type="button" style="width:100%; text-align:left; padding:12px 12px;">
+            Диапазон: <span id="rangeLabelValue" style="color:#fbbf24;">не задан</span>
+          </button>
         </div>
         <div style="flex:1; min-width: 140px;">
           <label for="step">Шаг</label>
@@ -173,16 +170,11 @@
           <input id="window" type="text" value="15s">
         </div>
       </div>
-      <div class="preset-row" style="margin-top:8px;">
-        <span class="muted">Быстрый диапазон:</span>
-        <button class="preset-btn" data-preset-min="5" type="button">5м</button>
-        <button class="preset-btn" data-preset-min="10" type="button">10м</button>
-        <button class="preset-btn" data-preset-min="30" type="button">30м</button>
-        <button class="preset-btn" data-preset-min="60" type="button">1ч</button>
-        <button class="preset-btn" data-preset-min="180" type="button">3ч</button>
-        <button class="preset-btn" id="rangeBtn" type="button">Установить доступный диапазон</button>
+      <div style="display:none;">
+        <input id="from" type="text" placeholder="2024-06-01T00:00:00Z">
+        <input id="to" type="text" placeholder="2024-06-01T01:00:00Z">
       </div>
-      <div class="muted" id="startErrors"></div>
+      <div class="muted" id="startErrors" style="margin-top:8px;"></div>
     </div>
 
     <div class="card">
@@ -205,21 +197,6 @@
         </div>
       </div>
       <div class="muted" id="errorNote" style="text-align:center; margin-top:6px;"></div>
-    </div>
-
-    <div class="card">
-      <div class="row wrap" style="gap:12px; align-items:flex-end;">
-        <div style="flex:1; min-width: 240px;">
-          <label for="seekManualTs">Перейти к</label>
-          <div class="input-with-btn">
-            <input id="seekManualTs" type="text" placeholder="2024-06-01T00:00:10Z">
-            <button class="picker-btn" data-picker="seekManualTs" type="button">…</button>
-          </div>
-        </div>
-        <div style="flex:0 0 140px; display:flex; align-items:flex-end;">
-          <button id="seekManualBtn" class="ghost" style="width:100%;">Seek</button>
-        </div>
-      </div>
     </div>
 
     <div class="card">
@@ -270,15 +247,9 @@
               <input id="chartFill" type="checkbox" checked style="width:auto; margin:0;">
               Фон
             </label>
-            <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px; display:flex; gap:6px; align-items:center;">
-              Точность
-              <select id="chartPrecision" style="background:#0b1324; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; padding:6px 8px;">
-                <option value="0">0</option>
-                <option value="1">1</option>
-                <option value="2">2</option>
-                <option value="3" selected>3</option>
-                <option value="4">4</option>
-              </select>
+            <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px;">
+              <input id="chartSmooth" type="checkbox" checked style="width:auto; margin:0;">
+              Сглаживание
             </label>
           </div>
           <div class="chart-meta" id="chartMeta">Нет данных</div>
@@ -290,7 +261,27 @@
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
           <div class="chart-legend-wrap">
             <table class="chart-legend-table" id="chartLegendTable">
-              <thead><tr><th>Датчик</th><th>Значение</th><th>Время</th><th>Текст</th><th></th></tr></thead>
+              <thead><tr>
+                <th></th>
+                <th>Датчик</th>
+                <th>
+                  Значение,
+                  <select id="chartPrecision" style="background:#0f172a; color:#e5e7eb; border:1px solid #1f2937; border-radius:6px; padding:2px 6px; font-size:12px;">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3" selected>3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                  </select>
+                </th>
+                <th>Время</th>
+                <th>Текст</th>
+                <th></th>
+              </tr></thead>
               <tbody id="chartLegendBody"></tbody>
             </table>
           </div>
@@ -307,6 +298,48 @@
       <div class="dlg-actions">
         <button type="submit" value="cancel" class="ghost">Отмена</button>
         <button type="submit" value="ok">Применить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="colorDialog">
+    <form method="dialog">
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:10px;">
+        <input id="colorInput" type="color" style="appearance:none; width:42px; height:42px; padding:0; border:1px solid #1f2937; border-radius:8px; background:transparent; cursor:pointer;">
+        <span style="font-size:15px; font-weight:700; color:#e5e7eb;">Выбрать цвет</span>
+      </div>
+      <div class="dlg-actions">
+        <button type="submit" value="ok">Применить</button>
+        <button type="submit" value="cancel" class="ghost">Отмена</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rangeDialog">
+    <form method="dialog">
+      <h3 style="margin:0 0 8px;">Диапазон</h3>
+      <div class="muted" style="margin-bottom:8px;">Быстрый диапазон</div>
+      <div class="preset-row" style="margin:0 0 12px; gap:8px; align-items:center;">
+        <button class="preset-btn" data-quick-min="5" type="button">5м</button>
+        <button class="preset-btn" data-quick-min="10" type="button">10м</button>
+        <button class="preset-btn" data-quick-min="30" type="button">30м</button>
+        <button class="preset-btn" data-quick-min="60" type="button">1ч</button>
+        <button class="preset-btn" data-quick-min="180" type="button">3ч</button>
+        <button class="ghost" id="rangeBtn" type="button" style="margin-left:auto;">Установить доступный диапазон</button>
+      </div>
+      <div class="row wrap" style="gap:12px;">
+        <div style="flex:1; min-width:260px;">
+          <label for="rangeDialogFrom">From</label>
+          <input id="rangeDialogFrom" type="datetime-local" step="1">
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <label for="rangeDialogTo">To</label>
+          <input id="rangeDialogTo" type="datetime-local" step="1">
+        </div>
+      </div>
+      <div class="dlg-actions">
+        <button type="submit" value="ok">Применить</button>
+        <button type="submit" value="cancel" class="ghost">Отмена</button>
       </div>
     </form>
   </dialog>
@@ -362,16 +395,18 @@
         playPause: document.getElementById('playPauseBtn'),
         stop: document.getElementById('stopBtn'),
         stepFwd: document.getElementById('stepFwdBtn'),
-        seekManual: document.getElementById('seekManualBtn'),
         jumpStart: document.getElementById('jumpStartBtn'),
         jumpEnd: document.getElementById('jumpEndBtn'),
       },
       log: document.getElementById('log'),
       clearLog: document.getElementById('clearLogBtn'),
-      snapTs: document.getElementById('snapTs'),
-      seekManualTs: document.getElementById('seekManualTs'),
       dialog: document.getElementById('datetimeDialog'),
       dialogInput: document.getElementById('dtInput'),
+      rangePicker: document.getElementById('rangePickerBtn'),
+      rangeDialog: document.getElementById('rangeDialog'),
+      rangeFrom: document.getElementById('rangeDialogFrom'),
+      rangeTo: document.getElementById('rangeDialogTo'),
+      rangeLabelValue: document.getElementById('rangeLabelValue'),
       table: {
         body: document.getElementById('tableBody'),
         filter: document.getElementById('tableFilter'),
@@ -389,6 +424,9 @@
         fill: document.getElementById('chartFill'),
         autoUpdate: document.getElementById('chartAutoUpdate'),
         precision: document.getElementById('chartPrecision'),
+        colorDialog: document.getElementById('colorDialog'),
+        colorInput: document.getElementById('colorInput'),
+        smooth: document.getElementById('chartSmooth'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
     };
@@ -437,6 +475,7 @@
       chart: null,
       maxPoints: 800,
       autoUpdate: true,
+      smooth: true,
       windowSec: 300,
       lastParamsSig: '',
       lastSkip: '',
@@ -657,6 +696,27 @@
       return alt;
     }
 
+    function normalizeHexColor(color) {
+      if (typeof color !== 'string') return '#22d3ee';
+      let hex = color.trim();
+      const shortHex = /^#([0-9a-fA-F]{3})$/;
+      const fullHex = /^#([0-9a-fA-F]{6})$/;
+      if (shortHex.test(hex)) {
+        const expanded = hex.slice(1).split('').map(c => c + c).join('');
+        return `#${expanded}`;
+      }
+      if (fullHex.test(hex)) return hex;
+      try {
+        const ctx = document.createElement('canvas').getContext('2d');
+        ctx.fillStyle = hex;
+        const computed = ctx.fillStyle;
+        if (fullHex.test(computed)) return computed;
+      } catch (_) {
+        /* ignore */
+      }
+      return '#22d3ee';
+    }
+
     function chartLabelByID(id) {
       const meta = tableState.meta.get(id) || sensorIndex.byId.get(id) || {};
       if (meta.name) return `${meta.name} (${id})`;
@@ -774,14 +834,30 @@
           const val = formatChartValue(ds.lastValue);
           const color = ds.color || '#22d3ee';
           const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
-          const text = sensorTextNameByID(id) || '—';
+          const text = (sensorIndex.byId.get(id)?.textname) || '—';
           const muted = chartState.focused !== null && chartState.focused !== id;
           const rowClass = muted ? 'legend-muted' : 'legend-active';
-          return `<tr data-sensor="${id}" class="${rowClass}"><td><input class="chart-color-input" type="color" value="${color}" data-sensor="${id}">${chartLabelByID(id)}</td><td>${val}</td><td>${ts}</td><td>${text}</td><td><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
+          return `<tr data-sensor="${id}" class="${rowClass}"><td><button class="chart-color-btn" data-sensor="${id}" style="background:${color};"></button></td><td>${chartLabelByID(id)}</td><td>${val}</td><td>${ts}</td><td>${text}</td><td style="text-align:right;"><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
         }).join('');
-        els.charts.legendBody.innerHTML = rows || '<tr><td colspan="5" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
+        els.charts.legendBody.innerHTML = rows || '<tr><td colspan="6" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
       } catch (err) {
-        els.charts.legendBody.innerHTML = `<tr><td colspan="5" style="color:#f87171;">${err?.message || err}</td></tr>`;
+        els.charts.legendBody.innerHTML = `<tr><td colspan="6" style="color:#f87171;">${err?.message || err}</td></tr>`;
+      }
+    }
+
+    function openColorDialog(id) {
+      const dlg = els.charts.colorDialog;
+      const input = els.charts.colorInput;
+      if (!dlg || !input) return;
+      const ds = chartState.datasets.get(id);
+      if (!ds) return;
+      const color = normalizeHexColor(ds.color || '#22d3ee');
+      input.value = color;
+      dlg.dataset.sensor = String(id);
+      if (!dlg.open) {
+        dlg.showModal();
+      } else {
+        input.focus();
       }
     }
 
@@ -863,7 +939,7 @@
         data: ds.data,
         borderColor: ds.color || '#22d3ee',
         backgroundColor: els.charts.fill?.checked ? hexToRGBA(ds.color || '#22d3ee', 0.15) : ds.color || '#22d3ee',
-        tension: 0.08,
+        tension: chartState.smooth ? 0.25 : 0,
         spanGaps: true,
         pointRadius: 0,
         borderWidth: 1,
@@ -1404,7 +1480,8 @@
       setDisabled(els.controls.stepBack, !canStep || atStart);
       setDisabled(els.controls.stepFwd, !canStep || atEnd);
       setDisabled(els.controls.stop, !active);
-      setDisabled(els.controls.playPause, st === 'failed');
+      const hasRange = range.valid;
+      setDisabled(els.controls.playPause, st === 'failed' || !hasRange);
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
       els.controls.playPause.classList.remove('primary');
@@ -1424,6 +1501,20 @@
     function setDisabled(el, disabled) {
       if (!el) return;
       el.disabled = !!disabled;
+    }
+
+    function updateRangeLabel() {
+      if (!els.rangePicker) return;
+      const from = els.inputs.from.value.trim();
+      const to = els.inputs.to.value.trim();
+      const valid = isValidISO(from) && isValidISO(to);
+      const label = valid ? `${from} → ${to}` : 'не задан';
+      if (els.rangeLabelValue) {
+        els.rangeLabelValue.textContent = label;
+        els.rangeLabelValue.style.color = valid ? '#e5e7eb' : '#fbbf24';
+      } else {
+        els.rangePicker.textContent = `Диапазон: ${label}`;
+      }
     }
 
     function validateStartForm() {
@@ -1501,9 +1592,9 @@
           renderTable();
         });
       }
-      document.querySelectorAll('[data-preset-min]').forEach(btn => {
-        btn.addEventListener('click', () => applyPresetMinutes(parseInt(btn.dataset.presetMin, 10)));
-      });
+      if (els.rangePicker) {
+        els.rangePicker.addEventListener('click', () => openRangeDialog());
+      }
       document.querySelectorAll('[data-picker]').forEach(btn => {
         btn.addEventListener('click', () => openPicker(btn.dataset.picker));
       });
@@ -1516,6 +1607,43 @@
         const input = document.getElementById(target);
         if (input && iso) input.value = iso;
       });
+      if (els.rangeDialog) {
+        els.rangeDialog.addEventListener('close', () => {
+          if (els.rangeDialog.returnValue !== 'ok') return;
+          const from = localInputToISO(els.rangeFrom?.value || '');
+          const to = localInputToISO(els.rangeTo?.value || '');
+          if (from) els.inputs.from.value = from;
+          if (to) els.inputs.to.value = to;
+          state.previewTs = null;
+          updateRangeLabel();
+          (async () => {
+            const payload = validateStartForm();
+            if (!payload) return;
+            try {
+              await requestJSON('POST', '/api/v2/job/range', payload);
+              await refresh(true);
+            } catch (err) {
+              log(`Диапазон: ${err.message}`, false);
+            }
+          })();
+        });
+        els.rangeDialog.querySelectorAll('[data-quick-min]').forEach(btn => {
+          btn.addEventListener('click', () => applyQuickRange(parseInt(btn.dataset.quickMin, 10)));
+        });
+      }
+      if (els.charts.colorDialog) {
+        els.charts.colorDialog.addEventListener('close', () => {
+          const id = Number(els.charts.colorDialog.dataset.sensor);
+          if (!Number.isFinite(id)) return;
+          if (els.charts.colorDialog.returnValue !== 'ok') return;
+          const color = normalizeHexColor(els.charts.colorInput?.value || '');
+          const ds = chartState.datasets.get(id);
+          if (!ds) return;
+          ds.color = color;
+          rebuildChartSeries();
+          renderLegendTable();
+        });
+      }
       els.timeline.addEventListener('change', onTimelineSeek);
       els.timeline.addEventListener('input', onTimelinePreview);
       els.timeline.addEventListener('pointerdown', () => {
@@ -1534,13 +1662,9 @@
         action('stop', '/api/v2/job/stop');
       });
       els.controls.playPause.addEventListener('click', onPlayPause);
-      els.controls.seekManual.addEventListener('click', () => {
-        const ts = els.seekManualTs.value.trim();
-        action('seek', '/api/v2/job/seek', { ts, apply: false });
-      });
       els.clearLog.addEventListener('click', () => { els.log.innerHTML = ''; });
       if (els.rangeBtn) {
-        els.rangeBtn.addEventListener('click', () => applyAvailableRange());
+        els.rangeBtn.addEventListener('click', () => applyAvailableRange(true));
       }
       if (els.controls.jumpStart) {
         els.controls.jumpStart.addEventListener('click', () => jumpToEdge('start'));
@@ -1563,20 +1687,14 @@
         });
       }
       if (els.charts.legendBody) {
-        els.charts.legendBody.addEventListener('input', (e) => {
-          const target = e.target;
-          if (target && target.matches('input.chart-color-input')) {
-            const id = Number(target.dataset.sensor);
-            if (!Number.isFinite(id)) return;
-            const color = target.value || '#22d3ee';
-            if (!chartState.datasets.has(id)) return;
-            const ds = chartState.datasets.get(id);
-            ds.color = color;
-            rebuildChart();
-          }
-        });
         els.charts.legendBody.addEventListener('click', (e) => {
           const target = e.target;
+          if (target && target.matches('button.chart-color-btn')) {
+            const id = Number(target.dataset.sensor);
+            if (!Number.isFinite(id)) return;
+            openColorDialog(id);
+            return;
+          }
           if (target && target.matches('button.chart-remove-btn')) {
             const id = Number(target.dataset.sensor);
             if (!Number.isFinite(id)) return;
@@ -1647,6 +1765,12 @@
       }
       if (els.charts.fill) {
         els.charts.fill.addEventListener('change', () => syncChartData());
+      }
+      if (els.charts.smooth) {
+        els.charts.smooth.addEventListener('change', () => {
+          chartState.smooth = !!els.charts.smooth.checked;
+          syncChartData();
+        });
       }
       if (els.charts.precision) {
         els.charts.precision.addEventListener('change', () => {
@@ -1730,6 +1854,21 @@
       els.dialog.showModal();
     }
 
+    function openRangeDialog() {
+      if (!els.rangeDialog || !els.rangeFrom || !els.rangeTo) return;
+      els.rangeFrom.value = isoToLocalInput(els.inputs.from.value.trim()) || '';
+      els.rangeTo.value = isoToLocalInput(els.inputs.to.value.trim()) || '';
+      els.rangeDialog.showModal();
+    }
+
+    function applyQuickRange(mins) {
+      if (!Number.isFinite(mins) || mins <= 0) return;
+      const now = new Date();
+      const from = new Date(now.getTime() - mins * 60 * 1000);
+      if (els.rangeFrom) els.rangeFrom.value = isoToLocalInput(toRFC3339(from));
+      if (els.rangeTo) els.rangeTo.value = isoToLocalInput(toRFC3339(now));
+    }
+
     function isoToLocalInput(iso) {
       const d = parseISO(iso);
       if (!d) return '';
@@ -1751,6 +1890,7 @@
       els.inputs.from.value = toRFC3339(from);
       els.inputs.to.value = toRFC3339(now);
       state.previewTs = null;
+      updateRangeLabel();
     }
 
     async function jumpToEdge(where) {
@@ -1764,7 +1904,6 @@
         return;
       }
       let target = where === 'end' ? range.to : range.from;
-      els.seekManualTs.value = target.toISOString().replace(/\.\d{3}Z$/, 'Z');
       await seekOrPreview(target.toISOString().replace(/\.\d{3}Z$/, 'Z'));
     }
 
@@ -1803,6 +1942,7 @@
     connectWS();
     renderTable(true);
     updateChartMeta();
+    updateRangeLabel();
 
     if (new URLSearchParams(location.search).get('test') === '1') {
       const script = document.createElement('script');
@@ -1811,7 +1951,7 @@
       document.body.appendChild(script);
     }
 
-    async function applyAvailableRange() {
+    async function applyAvailableRange(intoDialog = false) {
       try {
         logUI('range button clicked');
         const data = await requestJSON('GET', '/api/v2/job/range');
@@ -1820,14 +1960,15 @@
           log('Диапазон: нет данных', false);
           return;
         }
-        els.inputs.from.value = data.from;
-        els.inputs.to.value = data.to;
-        log(`Диапазон установлен: ${data.from} → ${data.to}`);
-        const payload = validateStartForm();
-        if (payload) {
-          await requestJSON('POST', '/api/v2/job/range', payload);
+        if (intoDialog && els.rangeFrom && els.rangeTo) {
+          els.rangeFrom.value = isoToLocalInput(data.from);
+          els.rangeTo.value = isoToLocalInput(data.to);
+        } else {
+          els.inputs.from.value = data.from;
+          els.inputs.to.value = data.to;
+          log(`Диапазон установлен: ${data.from} → ${data.to}`);
+          updateRangeLabel();
         }
-        await refresh(true);
       } catch (err) {
         log(`Диапазон: ${err.message}`, false);
       }

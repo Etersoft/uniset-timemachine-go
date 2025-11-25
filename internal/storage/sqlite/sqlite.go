@@ -253,28 +253,42 @@ WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
 ORDER BY timestamp, usec, sensor_id;
 `
 
-func (s *Store) Range(ctx context.Context, sensors []int64) (time.Time, time.Time, error) {
+func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
 	if err := s.resetFilter(ctx, sensors); err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, 0, err
 	}
-	row := s.db.QueryRowContext(ctx, rangeSQL)
+	args := []interface{}{}
+	var where string
+	if !from.IsZero() {
+		args = append(args, from.Format(time.RFC3339Nano))
+		where += " AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) >= strftime('%s', ?) * 1000000"
+	}
+	if !to.IsZero() {
+		args = append(args, to.Format(time.RFC3339Nano))
+		where += " AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) <= strftime('%s', ?) * 1000000"
+	}
+	row := s.db.QueryRowContext(ctx, fmt.Sprintf(rangeSQL, where), args...)
 	var minTs, maxTs sql.NullString
 	var minUsec, maxUsec sql.NullInt64
 	if err := row.Scan(&minTs, &minUsec, &maxTs, &maxUsec); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("sqlite: range scan: %w", err)
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("sqlite: range scan: %w", err)
 	}
 	if !minTs.Valid || !maxTs.Valid {
-		return time.Time{}, time.Time{}, nil
+		return time.Time{}, time.Time{}, 0, nil
+	}
+	var count int64
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(countSQL, where), args...).Scan(&count); err != nil {
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("sqlite: sensor count: %w", err)
 	}
 	minTime, err := parseTimestamp(minTs.String, minUsec.Int64)
 	if err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, 0, err
 	}
 	maxTime, err := parseTimestamp(maxTs.String, maxUsec.Int64)
 	if err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, 0, err
 	}
-	return minTime, maxTime, nil
+	return minTime, maxTime, count, nil
 }
 
 const rangeSQL = `
@@ -283,6 +297,7 @@ WITH filtered AS (
 	       COALESCE(time_usec, 0) AS usec
 	FROM main_history
 	WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
+	%s
 ),
 min_row AS (
 	SELECT timestamp, usec
@@ -301,6 +316,10 @@ SELECT
 	(SELECT usec FROM min_row) AS min_usec,
 	(SELECT timestamp FROM max_row) AS max_ts,
 	(SELECT usec FROM max_row) AS max_usec;
+`
+
+const countSQL = `
+SELECT COUNT(DISTINCT sensor_id) FROM main_history WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `) %s;
 `
 
 func IsSource(src string) bool {

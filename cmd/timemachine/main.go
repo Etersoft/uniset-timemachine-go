@@ -228,7 +228,7 @@ func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors 
 }
 
 func printRange(ctx context.Context, store storage.Storage, sensors []int64) {
-	min, max, err := store.Range(ctx, sensors)
+	min, max, count, err := store.Range(ctx, sensors, time.Time{}, time.Time{})
 	if err != nil {
 		log.Fatalf("failed to fetch range: %v", err)
 	}
@@ -236,7 +236,7 @@ func printRange(ctx context.Context, store storage.Storage, sensors []int64) {
 		fmt.Println("No data range found (possibly no records)")
 		return
 	}
-	fmt.Printf("Available range: %s → %s\n", min.Format(time.RFC3339), max.Format(time.RFC3339))
+	fmt.Printf("Available range: %s → %s (sensors: %d)\n", min.Format(time.RFC3339), max.Format(time.RFC3339), count)
 }
 
 type configResolver struct {

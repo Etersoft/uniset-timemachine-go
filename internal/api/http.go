@@ -94,6 +94,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 	}{
 		{"/api/v1/job", http.HandlerFunc(s.handleJob)},
 		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
+		{"/api/v2/job/sensors/count", http.HandlerFunc(s.handleSensorCount)},
 		{"/api/v2/job", http.HandlerFunc(s.handleJobV2)},
 		{"/api/v2/job/range", http.HandlerFunc(s.handleSetRange)},
 		{"/api/v2/job/seek", http.HandlerFunc(s.handleSetSeek)},
@@ -233,7 +234,7 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 		s.manager.SetRange(from, to, step, req.Speed, window)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case http.MethodGet:
-		min, max, err := s.manager.Range(r.Context())
+		min, max, count, err := s.manager.Range(r.Context())
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
@@ -242,9 +243,10 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, fmt.Errorf("no data range found"))
 			return
 		}
-		resp := map[string]string{
-			"from": "",
-			"to":   "",
+		resp := map[string]any{
+			"from":         "",
+			"to":           "",
+			"sensor_count": count,
 		}
 		if !min.IsZero() {
 			resp["from"] = min.Format(time.RFC3339)
@@ -387,7 +389,7 @@ func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	min, max, err := s.manager.Range(r.Context())
+	min, max, count, err := s.manager.Range(r.Context())
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -402,7 +404,12 @@ func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
 	if !max.IsZero() {
 		resp["to"] = max.Format(time.RFC3339)
 	}
-	writeJSON(w, http.StatusOK, resp)
+	respMap := map[string]any{
+		"from":         resp["from"],
+		"to":           resp["to"],
+		"sensor_count": count,
+	}
+	writeJSON(w, http.StatusOK, respMap)
 }
 
 func (s *Server) handleWSState(w http.ResponseWriter, r *http.Request) {
@@ -411,6 +418,40 @@ func (s *Server) handleWSState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.streamer.ServeWS(w, r)
+}
+
+// handleSensorCount возвращает количество уникальных датчиков в указанном диапазоне.
+func (s *Server) handleSensorCount(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var from, to time.Time
+	if v := r.URL.Query().Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid from: %w", err))
+			return
+		}
+		from = t
+	}
+	if v := r.URL.Query().Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("invalid to: %w", err))
+			return
+		}
+		to = t
+	}
+	count, err := s.manager.SensorsCount(r.Context(), from, to)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sensor_count": count,
+		"count":        count, // совместимость
+	})
 }
 
 func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {

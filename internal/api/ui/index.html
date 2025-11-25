@@ -84,11 +84,11 @@
     .table-meta { color: #94a3b8; font-size: 13px; }
     .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid #1f2937; }
     .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
-    .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 420px; margin: 0 auto; position: relative; overflow: hidden; }
+    .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 320px; margin: 0 auto; position: relative; overflow: hidden; }
     .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .chart-controls input { max-width: 320px; }
     .chart-meta { color: #94a3b8; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-    .chart-legend-wrap { max-height: 180px; overflow-y: auto; border: 1px solid #1f2937; border-radius: 10px; margin-top: 8px; }
+    .chart-legend-wrap { height: 180px; min-height: 140px; max-height: 360px; overflow-y: auto; overflow-x: hidden; border: 1px solid #1f2937; border-radius: 10px; margin-top: 8px; position: relative; padding-bottom: 10px; }
     .chart-legend-table { width: 100%; border-collapse: collapse; font-size: 13px; color: #e5e7eb; }
     .chart-legend-table th, .chart-legend-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937; }
     .chart-legend-table th:nth-child(1), .chart-legend-table td:nth-child(1) { width: 32px; text-align: center; }
@@ -104,6 +104,10 @@
     .chart-color-input { width: 32px; height: 24px; padding: 0; border: none; background: transparent; cursor: pointer; }
     .chart-suggest-wrap { position: relative; }
     .chart-suggest-box { position: absolute; top: 100%; left: 0; right: 0; background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; margin-top: 4px; box-shadow: 0 12px 30px rgba(0,0,0,0.4); max-height: 220px; overflow-y: auto; z-index: 5; display: none; }
+    .resize-handle { position: relative; left: 0; right: 0; height: 12px; cursor: ns-resize; background: linear-gradient(180deg, rgba(148,163,184,0.15), rgba(148,163,184,0.05)); border-top: 1px solid #1f2937; display: flex; align-items: center; justify-content: center; }
+    .resize-handle::after { content: ''; width: 38px; height: 4px; border-radius: 999px; background: rgba(148,163,184,0.45); }
+    .chart-resize-handle { margin-top: 6px; }
+    .legend-resize-handle { position: sticky; left: 0; right: 0; bottom: 0; height: 12px; margin-top: 4px; cursor: ns-resize; z-index: 2; }
     .chart-suggest-item { padding: 8px 10px; cursor: pointer; color: #e5e7eb; }
     .chart-suggest-item:hover { background: rgba(34,211,238,0.08); }
     .chart-suggest-item.active { background: rgba(34,211,238,0.12); }
@@ -268,11 +272,12 @@
           <div class="chart-meta" id="chartMeta">Нет данных</div>
         </div>
         <div class="chart-wrap">
-          <div class="chart-box">
+          <div class="chart-box" id="chartBox" style="height:420px;">
             <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
           </div>
+          <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
-          <div class="chart-legend-wrap">
+          <div class="chart-legend-wrap" id="chartLegendWrap" style="height:180px; overflow-y:auto; overflow-x:hidden;">
             <table class="chart-legend-table" id="chartLegendTable">
               <thead><tr>
                 <th></th>
@@ -298,7 +303,8 @@
               <tbody id="chartLegendBody"></tbody>
             </table>
           </div>
-        </div>
+            <div class="resize-handle legend-resize-handle" id="legendResizeHandle" title="Потяните, чтобы изменить высоту легенды"></div>
+          </div>
       </div>
     </div>
   </div>
@@ -434,7 +440,11 @@
         suggestions: document.getElementById('chartSensorsSuggestions'),
         suggestBox: document.getElementById('chartSuggestionsBox'),
         canvas: document.getElementById('chartCanvas'),
+        box: document.getElementById('chartBox'),
+        resizeHandle: document.getElementById('chartResizeHandle'),
         legendBody: document.getElementById('chartLegendBody'),
+        legendWrap: document.getElementById('chartLegendWrap'),
+        legendHandle: document.getElementById('legendResizeHandle'),
         fill: document.getElementById('chartFill'),
         autoUpdate: document.getElementById('chartAutoUpdate'),
         precision: document.getElementById('chartPrecision'),
@@ -495,8 +505,9 @@
       lastParamsSig: '',
       lastSkip: '',
       range: { from: null, to: null },
-      suggest: { items: [], active: -1 },
+      suggest: { items: [], active: -1, locked: false, lastQuery: '' },
       focused: null,
+      pendingChartUpdate: false,
     };
   const sensorIndex = {
       byId: new Map(),    // id -> {id,name,textname}
@@ -508,6 +519,15 @@
   let tableValuePrecision = 3;
   let tableRenderTimer = null;
   let tableFilterTimer = null;
+  let chartUpdateTimer = null;
+  const chartMaxSeries = 30;
+  const chartAutoAddLimit = 30;
+  let rangeSensorCount = Infinity;
+  let rangeSensorCountKnown = false;
+
+  function clamp(v, min, max) {
+    return Math.min(Math.max(v, min), max);
+  }
 
   function formatChartValue(v) {
     if (v === null || v === undefined) return '—';
@@ -831,14 +851,14 @@
           id,
           label: chartLabelByID(id),
           color,
-          data,
+          data: data ? data.slice() : [],
           lastValue,
           lastTs,
         });
       });
       chartState.datasets = next;
       if (chartState.chart) {
-        syncChartData();
+        scheduleChartSync();
       } else {
         rebuildChart();
       }
@@ -862,7 +882,16 @@
       }
       if (els.charts.empty) {
         const showEmpty = !chartState.selected.length || points === 0;
+        const autoAddNote = rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit
+          ? ` · автодобавление отключено (${rangeSensorCount} датчиков, лимит ${chartAutoAddLimit})`
+          : '';
+        els.charts.empty.textContent = chartState.selected.length
+          ? `Нет данных для отображения${autoAddNote}`
+          : `Выберите датчики для графика${autoAddNote}`;
         els.charts.empty.style.display = showEmpty ? 'flex' : 'none';
+      }
+      if (chartState.selected.length > chartMaxSeries) {
+        els.charts.meta.textContent += ` · Max ${chartMaxSeries} линий`;
       }
       if (els.charts.autoUpdate) {
         els.charts.autoUpdate.checked = chartState.autoUpdate;
@@ -925,6 +954,13 @@
     function renderChartSuggestions(query) {
       if (!els.charts.suggestBox) return;
       const q = (query || '').trim().toLowerCase();
+      const sameQuery = q === (chartState.suggest.lastQuery || '');
+      if (chartState.suggest.locked && sameQuery && els.charts.suggestBox.style.display === 'block') {
+        updateChartInputState();
+        return; // не сбрасываем выделение, пока пользователь навигирует по списку
+      }
+      chartState.suggest.lastQuery = q;
+      chartState.suggest.locked = false;
       const items = [];
       let availableCount = 0;
       sensorIndex.byId.forEach((meta, id) => {
@@ -966,12 +1002,13 @@
       if (!els.charts.suggestBox) return;
       els.charts.suggestBox.style.display = 'none';
       els.charts.suggestBox.innerHTML = '';
-      chartState.suggest = { items: [], active: -1 };
+      chartState.suggest = { items: [], active: -1, locked: false, lastQuery: chartState.suggest.lastQuery || '' };
     }
 
     function moveSuggestActive(delta) {
       const items = chartState.suggest.items || [];
       if (!items.length || !els.charts.suggestBox) return;
+      chartState.suggest.locked = true;
       const next = (chartState.suggest.active + delta + items.length) % items.length;
       chartState.suggest.active = next;
       Array.from(els.charts.suggestBox.children).forEach((el, idx) => {
@@ -1027,6 +1064,18 @@
       renderLegendTable();
     }
 
+    function scheduleChartSync() {
+      if (!chartState.chart) {
+        rebuildChart();
+        return;
+      }
+      if (chartUpdateTimer) return;
+      chartUpdateTimer = setTimeout(() => {
+        chartUpdateTimer = null;
+        syncChartData();
+      }, 150);
+    }
+
     function rebuildChart(force = false) {
       if (!els.charts.canvas) return;
       if (!chartState.selected.length) {
@@ -1034,6 +1083,10 @@
         updateChartMeta();
         renderLegendTable();
         return;
+      }
+      if (chartState.selected.length > chartMaxSeries) {
+        log(`На графике можно держать не более ${chartMaxSeries} датчиков одновременно`, false);
+        chartState.selected = chartState.selected.slice(0, chartMaxSeries);
       }
       const hasRange = chartState.range.from && chartState.range.to;
       const panelVisible = els.panels?.charts?.classList.contains('active');
@@ -1172,8 +1225,34 @@
       ds.data = ds.data.filter(p => p.x >= threshold);
     }
 
+    function decimateDataset(ds) {
+      const max = chartState.maxPoints;
+      if (!ds || !Array.isArray(ds.data)) return;
+      const len = ds.data.length;
+      if (len <= max) return;
+      const stride = Math.ceil(len / max);
+      if (stride <= 1) return;
+      const decimated = [];
+      for (let i = 0; i < len; i += stride) {
+        decimated.push(ds.data[i]);
+      }
+      // сохраняем последний элемент, если не попал
+      const last = ds.data[len - 1];
+      if (decimated[decimated.length - 1]?.x !== last.x) decimated.push(last);
+      ds.data = decimated;
+    }
+
     function appendChartPoint(tsStr, updates) {
-      if (!chartState.selected.length || !tsStr) return;
+      if (!tsStr) return;
+      const canAutoAdd = rangeSensorCountKnown && rangeSensorCount > 0 && rangeSensorCount <= chartAutoAddLimit;
+      if (!chartState.selected.length && canAutoAdd && updates?.length) {
+        const ids = Array.from(new Set((updates || []).map(u => Number(u.id)).filter(Number.isFinite)));
+        if (ids.length) {
+          applyChartSensors(ids);
+        }
+      }
+      if (!chartState.selected.length) return;
+      if (chartState.selected.length >= chartAutoAddLimit && !updates?.length) return;
       if (!chartState.autoUpdate) return;
       if (els.charts.autoUpdate && !els.charts.autoUpdate.checked) return;
       const d = parseISO(tsStr);
@@ -1212,19 +1291,28 @@
         ds.lastValue = y;
         ds.lastTs = t;
         ds.data.push({x: t, y});
-        if (ds.data.length > chartState.maxPoints) ds.data.shift();
+        decimateDataset(ds);
         trimDataset(ds, t);
       });
       if (chartState.chart) {
-        syncChartData();
+        scheduleChartSync();
       } else {
         rebuildChart();
       }
     }
 
     function applyChartSensors(list) {
+      if ((chartState.selected.length || 0) >= chartAutoAddLimit && !list.length) {
+        // Если уже достаточно линий, не авто-добавляем новые без явного списка.
+        return;
+      }
       const normalized = normalizeSensorList(list || []);
-      chartState.selected = normalized;
+      if (normalized.length > chartMaxSeries) {
+        normalized.length = chartMaxSeries;
+      }
+      const withValues = normalized.filter(sensorHasValue);
+      const picked = withValues.length ? withValues : normalized;
+      chartState.selected = picked.slice(0, chartMaxSeries);
       if (chartState.focused !== null && !chartState.selected.includes(chartState.focused)) {
         chartState.focused = null;
       }
@@ -1233,6 +1321,13 @@
       }
       rebuildChartSeries();
       hideChartSuggestions();
+    }
+
+    function sensorHasValue(id) {
+      const row = tableState.rows.get(id);
+      if (row && row.hasValue) return true;
+      const ds = chartState.datasets.get(id);
+      return ds && ds.lastValue !== undefined && ds.lastValue !== null;
     }
 
     function clearChart() {
@@ -1262,11 +1357,18 @@
       hideChartSuggestions();
     }
 
+    function canAutoAddSensors(list) {
+      const cnt = Array.isArray(list) ? list.length : 0;
+      if (rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit) return false;
+      if (cnt > chartAutoAddLimit) return false;
+      return true;
+    }
+
     function hydrateChartDefaultsFromParams() {
       if (chartState.selected.length) return;
       const params = state.model.params || state.model.Params || {};
       const sensors = params.Sensors || params.sensors;
-      if (Array.isArray(sensors) && sensors.length) {
+      if (Array.isArray(sensors) && sensors.length && canAutoAddSensors(sensors)) {
         applyChartSensors(sensors);
       }
     }
@@ -1284,7 +1386,7 @@
       if (sig && sig !== chartState.lastParamsSig) {
         chartState.lastParamsSig = sig;
         const sensors = params?.Sensors || params?.sensors;
-        if (Array.isArray(sensors) && sensors.length) {
+        if (Array.isArray(sensors) && sensors.length && canAutoAddSensors(sensors)) {
           applyChartSensors(sensors);
         } else {
           clearChart();
@@ -1616,8 +1718,12 @@
     async function startJob() {
       const payload = validateStartForm();
       if (!payload) return;
+      if (rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit) {
+        log(`В диапазоне ${rangeSensorCount} датчиков, автодобавление в графики отключено (лимит ${chartAutoAddLimit})`, true);
+      }
       logUI(`set range v2 ${JSON.stringify(payload)}`);
       await requestJSON('POST', '/api/v2/job/range', payload);
+      await fetchSensorCount(payload.from, payload.to);
       logUI('startJob (v2) using pending');
       try {
         await requestJSON('POST', '/api/v2/job/start', {});
@@ -1685,6 +1791,7 @@
             if (!payload) return;
             try {
               await requestJSON('POST', '/api/v2/job/range', payload);
+              await fetchSensorCount(payload.from, payload.to);
               await refresh(true);
             } catch (err) {
               log(`Диапазон: ${err.message}`, false);
@@ -1786,6 +1893,9 @@
           if (!target) return;
           const id = Number(target.dataset.sensor);
           if (!Number.isFinite(id)) return;
+          if (chartState.selected.length >= chartMaxSeries) {
+            return;
+          }
           applyChartSensors([...chartState.selected, id]);
           hideChartSuggestions();
         });
@@ -1822,9 +1932,18 @@
             setTimeout(() => renderChartSuggestions(e.target.value), 0);
           }
         });
-        els.charts.sensors.addEventListener('input', (e) => renderChartSuggestions(e.target.value));
-        els.charts.sensors.addEventListener('change', () => addSensorsFromInput());
-        els.charts.sensors.addEventListener('focus', (e) => renderChartSuggestions(e.target.value));
+        els.charts.sensors.addEventListener('input', (e) => {
+          chartState.suggest.locked = false;
+          renderChartSuggestions(e.target.value);
+        });
+        els.charts.sensors.addEventListener('change', () => {
+          chartState.suggest.locked = false;
+          addSensorsFromInput();
+        });
+        els.charts.sensors.addEventListener('focus', (e) => {
+          chartState.suggest.locked = false;
+          renderChartSuggestions(e.target.value);
+        });
         els.charts.sensors.addEventListener('blur', () => setTimeout(hideChartSuggestions, 120));
       }
       if (els.charts.fill) {
@@ -1984,6 +2103,91 @@
       return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
     }
 
+    function setupVerticalResize({ handle, target, storageKey, min = 240, max = 900, onChange }) {
+      if (!handle || !target) return;
+      const applyHeight = (h) => {
+        const height = clamp(h, min, max);
+        target.style.height = `${height}px`;
+        if (onChange) onChange(height);
+        return height;
+      };
+      const stored = Number(localStorage.getItem(storageKey));
+      if (Number.isFinite(stored)) {
+        applyHeight(stored);
+      } else {
+        const current = target.getBoundingClientRect().height || min;
+        applyHeight(current);
+      }
+      handle.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const startY = e.clientY;
+        const startH = target.getBoundingClientRect().height;
+        let latest = startH;
+        const onMove = (ev) => {
+          ev.preventDefault();
+          latest = applyHeight(startH + (ev.clientY - startY));
+        };
+        const onUp = () => {
+          localStorage.setItem(storageKey, String(latest));
+          document.removeEventListener('pointermove', onMove);
+          document.removeEventListener('pointerup', onUp);
+        };
+        document.addEventListener('pointermove', onMove);
+        document.addEventListener('pointerup', onUp);
+      });
+    }
+
+    function initResizablePanels() {
+      setupVerticalResize({
+        handle: els.charts.resizeHandle,
+        target: els.charts.box,
+        storageKey: 'chartHeightPx',
+        min: 320,
+        max: 900,
+        onChange: () => {
+          if (chartState.chart) {
+            chartState.chart.resize();
+            scheduleChartSync();
+          }
+        },
+      });
+      setupVerticalResize({
+        handle: els.charts.legendHandle,
+        target: els.charts.legendWrap,
+        storageKey: 'chartLegendHeightPx',
+        min: 140,
+        max: 500,
+      });
+    }
+
+    async function fetchSensorCount(from, to) {
+      if (!isValidISO(from) || !isValidISO(to)) {
+        rangeSensorCount = Infinity;
+        rangeSensorCountKnown = false;
+        log('Диапазон: количество датчиков неизвестно', false);
+        return;
+      }
+      const qs = new URLSearchParams({ from, to }).toString();
+      try {
+        const data = await requestJSON('GET', `/api/v2/job/sensors/count?${qs}`);
+        const cnt = Number(data?.sensor_count ?? data?.count);
+        if (Number.isFinite(cnt)) {
+          rangeSensorCount = cnt;
+          rangeSensorCountKnown = true;
+          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, true);
+        } else {
+          rangeSensorCount = Infinity;
+          rangeSensorCountKnown = false;
+          log('Диапазон: количество датчиков неизвестно', false);
+        }
+      } catch (err) {
+        rangeSensorCount = Infinity;
+        rangeSensorCountKnown = false;
+        log(`Диапазон: ${err.message}`, false);
+      }
+      updateChartMeta();
+    }
+
     async function startPolling() {
       try { await refresh(true); } catch (err) { log(`Init: ${err.message}`, false); }
       setInterval(async () => {
@@ -2002,6 +2206,7 @@
     bindActions();
     updateControls();
     preloadSensors();
+    initResizablePanels();
     startPolling();
     connectWS();
     scheduleRenderTable(true);
@@ -2020,6 +2225,15 @@
         logUI('range button clicked');
         const data = await requestJSON('GET', '/api/v2/job/range');
         logUI('Диапазон получен через v2');
+        if (Number.isFinite(Number(data?.sensor_count))) {
+          rangeSensorCount = Number(data.sensor_count);
+          rangeSensorCountKnown = true;
+          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, true);
+        } else {
+          rangeSensorCount = Infinity;
+          rangeSensorCountKnown = false;
+          log('Диапазон: количество датчиков неизвестно', false);
+        }
         if (!data || !data.from || !data.to) {
           log('Диапазон: нет данных', false);
           return;

@@ -33,9 +33,9 @@ func (s *apiTestStorage) Stream(ctx context.Context, req storage.StreamRequest) 
 	return dataCh, errCh
 }
 
-func (s *apiTestStorage) Range(context.Context, []int64) (time.Time, time.Time, error) {
+func (s *apiTestStorage) Range(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, error) {
 	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
-	return start, start.Add(10 * time.Second), nil
+	return start, start.Add(10 * time.Second), 2, nil
 }
 
 type apiTestClient struct {

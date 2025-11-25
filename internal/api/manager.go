@@ -429,8 +429,15 @@ func (m *Manager) stepPendingLocked(forward bool) bool {
 }
 
 // Range возвращает минимальный/максимальный timestamp для текущего списка датчиков.
-func (m *Manager) Range(ctx context.Context) (time.Time, time.Time, error) {
-	return m.service.Storage.Range(ctx, m.sensors)
+func (m *Manager) Range(ctx context.Context) (time.Time, time.Time, int64, error) {
+	// Доступный диапазон считаем по всему объёму истории, без учёта текущего pending-диапазона,
+	// чтобы кнопка «установить доступный диапазон» всегда возвращала реальные границы данных.
+	return m.service.Storage.Range(ctx, m.sensors, time.Time{}, time.Time{})
+}
+
+func (m *Manager) SensorsCount(ctx context.Context, from, to time.Time) (int64, error) {
+	_, _, count, err := m.service.Storage.Range(ctx, m.sensors, from, to)
+	return count, err
 }
 
 type Status struct {

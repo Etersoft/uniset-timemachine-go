@@ -66,6 +66,6 @@ func (s *ExampleStore) Stream(ctx context.Context, req storage.StreamRequest) (<
 	return dataCh, errCh
 }
 
-func (s *ExampleStore) Range(ctx context.Context, sensors []int64) (time.Time, time.Time, error) {
-	return s.from, s.to, nil
+func (s *ExampleStore) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
+	return s.from, s.to, int64(len(sensors)), nil
 }

@@ -47,7 +47,7 @@ func TestExampleStoreWarmupStreamAndRange(t *testing.T) {
 		t.Fatalf("unexpected value for sensor 1: %v", batches[0][0].Value)
 	}
 
-	from, to, err := store.Range(context.Background(), []int64{1, 2})
+	from, to, _, err := store.Range(context.Background(), []int64{1, 2}, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Range returned error: %v", err)
 	}

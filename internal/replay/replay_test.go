@@ -33,8 +33,8 @@ func (f *fakeStorage) Stream(context.Context, storage.StreamRequest) (<-chan []s
 	return dataCh, errCh
 }
 
-func (f *fakeStorage) Range(context.Context, []int64) (time.Time, time.Time, error) {
-	return time.Time{}, time.Time{}, nil
+func (f *fakeStorage) Range(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, error) {
+    return time.Time{}, time.Time{}, 0, nil
 }
 
 type fakeClient struct {
@@ -161,8 +161,8 @@ func (s *controlStorage) Stream(ctx context.Context, req storage.StreamRequest) 
 	return dataCh, errCh
 }
 
-func (s *controlStorage) Range(context.Context, []int64) (time.Time, time.Time, error) {
-	return time.Time{}, time.Time{}, nil
+func (s *controlStorage) Range(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, error) {
+	return time.Time{}, time.Time{}, int64(len(s.events)), nil
 }
 
 func TestRunWithControlStepBackwardApply(t *testing.T) {

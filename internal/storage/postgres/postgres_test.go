@@ -56,7 +56,7 @@ func TestStoreWarmupStreamAndRange_Postgres(t *testing.T) {
 		t.Fatalf("Warmup sensor 51 mismatch: %#v", ev)
 	}
 
-	min, max, err := store.Range(ctx, sensors)
+	min, max, _, err := store.Range(ctx, sensors, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Range returned error: %v", err)
 	}

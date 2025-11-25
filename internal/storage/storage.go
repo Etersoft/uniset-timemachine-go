@@ -26,6 +26,6 @@ type Storage interface {
 	Warmup(ctx context.Context, sensors []int64, from time.Time) ([]SensorEvent, error)
 	// Stream запускает потоковую подгрузку изменений в пределах периода.
 	Stream(ctx context.Context, req StreamRequest) (<-chan []SensorEvent, <-chan error)
-	// Range возвращает минимальный и максимальный timestamp для выбранных датчиков.
-	Range(ctx context.Context, sensors []int64) (time.Time, time.Time, error)
+	// Range возвращает минимальный и максимальный timestamp и число уникальных датчиков для выбранных датчиков.
+	Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error)
 }

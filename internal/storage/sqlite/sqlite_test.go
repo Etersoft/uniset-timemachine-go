@@ -56,7 +56,7 @@ func TestStoreWarmupStreamAndRange(t *testing.T) {
 		t.Fatalf("Warmup sensor 10002 mismatch: %#v", ev)
 	}
 
-	min, max, err := store.Range(ctx, sensors)
+	min, max, count, err := store.Range(ctx, sensors, time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("Range returned error: %v", err)
 	}
@@ -65,6 +65,9 @@ func TestStoreWarmupStreamAndRange(t *testing.T) {
 	}
 	if !max.Equal(start.Add(6*time.Second + 100*time.Microsecond)) {
 		t.Fatalf("Range max mismatch: %s", max)
+	}
+	if count != int64(len(sensors)) {
+		t.Fatalf("Range count mismatch: %d", count)
 	}
 
 	req := storage.StreamRequest{

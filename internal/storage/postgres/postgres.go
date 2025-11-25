@@ -167,20 +167,21 @@ func combineTimestamp(ts time.Time, usec int64) time.Time {
 	return ts.Add(time.Duration(usec) * time.Microsecond)
 }
 
-func (s *Store) Range(ctx context.Context, sensors []int64) (time.Time, time.Time, error) {
+func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
 	if len(sensors) == 0 {
-		return time.Time{}, time.Time{}, fmt.Errorf("postgres: sensors list is empty")
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("postgres: sensors list is empty")
 	}
-	row := s.pool.QueryRow(ctx, rangeSQL, sensorsAsArray(sensors))
+	row := s.pool.QueryRow(ctx, rangeSQL, sensorsAsArray(sensors), from, to)
 	var minTs, maxTs time.Time
 	var minUsec, maxUsec int64
-	if err := row.Scan(&minTs, &minUsec, &maxTs, &maxUsec); err != nil {
+	var count int64
+	if err := row.Scan(&minTs, &minUsec, &maxTs, &maxUsec, &count); err != nil {
 		if err == pgx.ErrNoRows {
-			return time.Time{}, time.Time{}, nil
+			return time.Time{}, time.Time{}, 0, nil
 		}
-		return time.Time{}, time.Time{}, fmt.Errorf("postgres: range scan: %w", err)
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("postgres: range scan: %w", err)
 	}
-	return combineTimestamp(minTs, minUsec), combineTimestamp(maxTs, maxUsec), nil
+	return combineTimestamp(minTs, minUsec), combineTimestamp(maxTs, maxUsec), count, nil
 }
 
 const warmupSQL = `
@@ -213,6 +214,8 @@ WITH filtered AS (
 	       COALESCE(time_usec, 0) AS usec
 	FROM main_history
 	WHERE sensor_id = ANY($1)
+	  AND ($2::timestamptz IS NULL OR timestamp >= $2)
+	  AND ($3::timestamptz IS NULL OR timestamp <= $3)
 ),
 min_row AS (
 	SELECT timestamp, usec
@@ -230,7 +233,8 @@ SELECT
 	(SELECT timestamp FROM min_row) AS min_ts,
 	(SELECT usec FROM min_row) AS min_usec,
 	(SELECT timestamp FROM max_row) AS max_ts,
-	(SELECT usec FROM max_row) AS max_usec;
+	(SELECT usec FROM max_row) AS max_usec,
+	(SELECT COUNT(DISTINCT sensor_id) FROM filtered) AS sensor_count;
 `
 
 func IsPostgresURL(db string) bool {

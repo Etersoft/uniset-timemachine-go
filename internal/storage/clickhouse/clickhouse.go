@@ -205,25 +205,26 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 	return dataCh, errCh
 }
 
-func (s *Store) Range(ctx context.Context, sensors []int64) (time.Time, time.Time, error) {
+func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
 	names, err := s.namesForSensors(sensors)
 	if err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, 0, err
 	}
 	if len(names) == 0 {
-		return time.Time{}, time.Time{}, fmt.Errorf("clickhouse: sensors list is empty")
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: sensors list is empty")
 	}
 	if err := s.refreshFilter(ctx, names); err != nil {
-		return time.Time{}, time.Time{}, err
+		return time.Time{}, time.Time{}, 0, err
 	}
 
 	query := fmt.Sprintf(rangeSQL, s.table, filterTable)
-	row := s.conn.QueryRow(ctx, query)
+	row := s.conn.QueryRow(ctx, query, from, to)
 	var minTs, maxTs time.Time
-	if err := row.Scan(&minTs, &maxTs); err != nil {
-		return time.Time{}, time.Time{}, fmt.Errorf("clickhouse: range scan: %w", err)
+	var count int64
+	if err := row.Scan(&minTs, &maxTs, &count); err != nil {
+		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: range scan: %w", err)
 	}
-	return minTs, maxTs, nil
+	return minTs, maxTs, count, nil
 }
 
 func (s *Store) namesForSensors(ids []int64) ([]string, error) {
@@ -292,9 +293,12 @@ ORDER BY timestamp, name;
 
 const rangeSQL = `
 SELECT min(timestamp) AS min_ts,
-       max(timestamp) AS max_ts
+       max(timestamp) AS max_ts,
+       count(DISTINCT sensor_id) AS sensor_count
 FROM %s
-WHERE name IN (SELECT name FROM %s);
+WHERE name IN (SELECT name FROM %s)
+  AND (@from = '0001-01-01 00:00:00' OR timestamp >= @from)
+  AND (@to = '0001-01-01 00:00:00' OR timestamp <= @to);
 `
 
 func IsSource(dsn string) bool {

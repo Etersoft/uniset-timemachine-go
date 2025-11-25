@@ -93,7 +93,7 @@
     .chart-legend-table th, .chart-legend-table td { padding: 6px 8px; border-bottom: 1px solid #1f2937; }
     .chart-legend-table th:nth-child(1), .chart-legend-table td:nth-child(1) { width: 32px; text-align: center; }
     .chart-legend-table th:nth-child(2), .chart-legend-table td:nth-child(2) { width: 20%; }
-    .chart-legend-table th:nth-child(3), .chart-legend-table td:nth-child(3) { width: 25%; }
+    .chart-legend-table th:nth-child(3), .chart-legend-table td:nth-child(3) { width: 18%; }
     .chart-legend-table th:nth-child(4), .chart-legend-table td:nth-child(4) { width: 20%; }
     .chart-legend-table th:nth-child(5), .chart-legend-table td:nth-child(5) { width: auto; }
     .chart-legend-table th:nth-child(6), .chart-legend-table td:nth-child(6) { text-align: right; width: 60px; }
@@ -219,7 +219,20 @@
             <thead>
               <tr>
                 <th style="width:180px;">Name</th>
-                <th class="value">Value</th>
+                <th class="value">
+                  Value
+                  <select id="tablePrecision" style="background:#0f172a; color:#e5e7eb; border:1px solid #1f2937; border-radius:6px; padding:2px 6px; font-size:12px; margin-left:6px;">
+                    <option value="0">0</option>
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="3" selected>3</option>
+                    <option value="4">4</option>
+                    <option value="5">5</option>
+                    <option value="6">6</option>
+                    <option value="7">7</option>
+                    <option value="8">8</option>
+                  </select>
+                </th>
                 <th>Text</th>
               </tr>
             </thead>
@@ -411,6 +424,7 @@
         body: document.getElementById('tableBody'),
         filter: document.getElementById('tableFilter'),
         meta: document.getElementById('tableMeta'),
+        precision: document.getElementById('tablePrecision'),
       },
       charts: {
         sensors: document.getElementById('chartSensors'),
@@ -462,12 +476,13 @@
       }
     };
 
-  const tableState = {
+    const tableState = {
       rows: new Map(),
       meta: new Map(),
       filter: '',
       lastStep: '-',
       lastTs: '-',
+      precision: 3,
     };
     const chartState = {
       selected: [],
@@ -490,12 +505,22 @@
     };
 
   let chartValuePrecision = 3;
+  let tableValuePrecision = 3;
+  let tableRenderTimer = null;
+  let tableFilterTimer = null;
 
   function formatChartValue(v) {
     if (v === null || v === undefined) return '—';
     const num = Number(v);
     if (!Number.isFinite(num)) return '—';
     return num.toFixed(chartValuePrecision);
+  }
+
+  function formatTableValue(v) {
+    if (v === null || v === undefined) return '—';
+    const num = Number(v);
+    if (!Number.isFinite(num)) return '—';
+    return num.toFixed(tableValuePrecision);
   }
 
   function log(message, ok = true) {
@@ -570,7 +595,7 @@
         case 'reset':
           tableState.rows.clear();
           tableState.meta.clear();
-          renderTable(true);
+          scheduleRenderTable(true);
           break;
         case 'snapshot':
           applySnapshot(msg.updates || [], tsStr);
@@ -583,7 +608,7 @@
         default:
           break;
       }
-      renderTable();
+      scheduleRenderTable();
     }
 
     function applySnapshot(list, tsStr) {
@@ -634,6 +659,22 @@
       refreshChartSuggestions();
     }
 
+    function scheduleRenderTable(force) {
+      if (force) {
+        if (tableRenderTimer) {
+          clearTimeout(tableRenderTimer);
+          tableRenderTimer = null;
+        }
+        renderTable(true);
+        return;
+      }
+      if (tableRenderTimer) return;
+      tableRenderTimer = setTimeout(() => {
+        tableRenderTimer = null;
+        renderTable();
+      }, 50);
+    }
+
     function renderTable(force) {
       if (!els.table.body) return;
       const filter = (tableState.filter || '').trim();
@@ -668,16 +709,21 @@
       const now = Date.now();
       const html = filtered.map(r => {
         const isChanged = r.changedAt && now - r.changedAt < 4000;
-        const value = r.hasValue ? r.value : '—';
-        return `<tr class="${isChanged ? 'changed' : ''}"><td>${r.name || ''}</td><td class="value">${value}</td><td>${r.textname || ''}</td></tr>`;
+        const value = r.hasValue ? formatTableValue(r.value) : '—';
+        const metaText = tableState.meta.get(r.id)?.textname || sensorIndex.byId.get(r.id)?.textname || '';
+        const text = r.textname || metaText || '';
+        return `<tr class="${isChanged ? 'changed' : ''}"><td>${r.name || ''}</td><td class="value">${value}</td><td>${text}</td></tr>`;
       }).join('');
       els.table.body.innerHTML = html || `<tr><td colspan="3" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
       if (els.table.meta) {
         const ts = tableState.lastTs || '—';
-        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts}`;
+        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts} · ${filtered.length} строк`;
       }
       if (els.table.filter) {
-        setDisabled(els.table.filter, tableState.meta.size === 0);
+        setDisabled(els.table.filter, false);
+      }
+      if (els.table.precision) {
+        els.table.precision.value = String(tableState.precision ?? 3);
       }
     }
 
@@ -960,13 +1006,13 @@
 
     function updateChartInputState(availableCount) {
       if (!els.charts.sensors) return;
-      const totalAvailable = availableCount !== undefined ? availableCount : sensorIndex.byId.size - chartState.selected.length;
-      const disable = totalAvailable <= 0;
-      els.charts.sensors.disabled = disable;
+      const totalAvailable = availableCount !== undefined ? availableCount : Math.max(sensorIndex.byId.size - chartState.selected.length, 0);
+      // Не блокируем поле, чтобы можно было вводить даже при пустых подсказках.
+      els.charts.sensors.disabled = false;
       if (els.charts.sensors.parentElement) {
-        els.charts.sensors.parentElement.classList.toggle('input-disabled', disable);
+        els.charts.sensors.parentElement.classList.remove('input-disabled');
       }
-      if (disable) hideChartSuggestions();
+      if (totalAvailable <= 0) hideChartSuggestions();
     }
 
     function syncChartData() {
@@ -1284,7 +1330,7 @@
         const updates = data?.updates || data?.Updates || [];
         const stepTs = data?.step_ts || data?.StepTS || '';
         applySnapshot(updates, stepTs);
-        renderTable(true);
+        scheduleRenderTable(true);
       } catch (err) {
         log(`Snapshot fallback: ${err.message}`, false);
       }
@@ -1587,9 +1633,27 @@
         btn.addEventListener('click', () => setTab(btn.dataset.tab));
       });
       if (els.table.filter) {
-        els.table.filter.addEventListener('input', () => {
-          tableState.filter = els.table.filter.value.toLowerCase();
-          renderTable();
+        els.table.filter.addEventListener('input', (e) => {
+          const v = e.target.value.toLowerCase();
+          if (tableFilterTimer) clearTimeout(tableFilterTimer);
+          tableFilterTimer = setTimeout(() => {
+            tableState.filter = v;
+            scheduleRenderTable(true);
+          }, 150);
+        });
+        els.table.filter.addEventListener('keydown', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            e.target.blur();
+          }
+        });
+      }
+      if (els.table.precision) {
+        els.table.precision.addEventListener('change', () => {
+          const v = Number(els.table.precision.value);
+          tableValuePrecision = Number.isFinite(v) ? v : 3;
+          tableState.precision = tableValuePrecision;
+          renderTable(true);
         });
       }
       if (els.rangePicker) {
@@ -1940,7 +2004,7 @@
     preloadSensors();
     startPolling();
     connectWS();
-    renderTable(true);
+    scheduleRenderTable(true);
     updateChartMeta();
     updateRangeLabel();
 

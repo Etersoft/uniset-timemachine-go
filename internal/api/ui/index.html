@@ -1480,6 +1480,31 @@
       ds.data = decimated;
     }
 
+    function truncateChartAfter(tsMs) {
+      if (!Number.isFinite(tsMs)) return;
+      let changed = false;
+      chartState.datasets.forEach((ds) => {
+        if (!ds || !Array.isArray(ds.data)) return;
+        const filtered = ds.data.filter(p => Number.isFinite(p?.x) && p.x <= tsMs);
+        if (filtered.length !== ds.data.length) {
+          ds.data = filtered;
+          const last = filtered[filtered.length - 1];
+          ds.lastTs = last?.x || null;
+          ds.lastValue = last?.y ?? null;
+          changed = true;
+        } else if (ds.lastTs && ds.lastTs > tsMs) {
+          ds.lastTs = null;
+          ds.lastValue = null;
+          changed = true;
+        }
+      });
+      if (changed) {
+        scheduleChartSync();
+        renderLegendTable();
+        updateChartMeta();
+      }
+    }
+
     function appendChartPoint(tsStr, updates) {
       if (!tsStr) return;
       const canAutoAdd = rangeSensorCountKnown && rangeSensorCount > 0 && rangeSensorCount <= chartAutoAddLimit;
@@ -2379,6 +2404,10 @@
       const pending = state.model.pending || state.model.Pending || {};
       const range = getEffectiveRange(params, pending);
       if (!range.valid) return;
+      const target = new Date(ts);
+      if (Number.isFinite(target.getTime())) {
+        truncateChartAfter(target.getTime());
+      }
       logUI(`seekOrPreview request ts=${ts}`);
       await action('seek', '/api/v2/job/seek', { ts, apply: false });
     }

@@ -13,6 +13,7 @@ help:
 	@echo "  ch-down     - stop ClickHouse docker"
 	@echo "  gen-sensors - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
 	@echo "  gen-db      - generate SQLite dataset (see GEN_DB_*)"
+	@echo "  gen-config-example - write config/config-example.yaml"
 	@echo "  bench       - run timemachine bench using $(CONFIG_YAML) (override via BENCH_FLAGS)"
 	@echo "  check-sm    - send test set/get to SharedMemory"
 	@echo "  clean-bench - remove generated SQLite/ClickHouse artifacts"
@@ -53,6 +54,9 @@ GEN_DB_RANDOM ?= 50
 gen-db:
 	@echo "Generating sqlite data into $(GEN_DB_PATH)"
 	@go run ./cmd/gen-sqlite-data --db $(GEN_DB_PATH) --confile config/test.xml --selector $(GEN_DB_SELECTOR) --sensors $(GEN_DB_SENSORS) --points $(GEN_DB_POINTS) --step $(GEN_DB_STEP) --random $(GEN_DB_RANDOM) --reset
+
+gen-config-example:
+	@./scripts/gen-config-example.sh
 
 BENCH_FLAGS ?=
 

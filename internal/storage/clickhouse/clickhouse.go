@@ -217,14 +217,29 @@ func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) 
 		return time.Time{}, time.Time{}, 0, err
 	}
 
-	query := fmt.Sprintf(rangeSQL, s.table, filterTable)
-	row := s.conn.QueryRow(ctx, query, from, to)
+	query := fmt.Sprintf(`
+SELECT min(timestamp) AS min_ts,
+       max(timestamp) AS max_ts,
+       count(DISTINCT name) AS sensor_count
+FROM %s
+WHERE name IN (SELECT name FROM %s)
+`, s.table, filterTable)
+	var args []any
+	if !from.IsZero() {
+		query += "  AND timestamp >= ?\n"
+		args = append(args, from)
+	}
+	if !to.IsZero() {
+		query += "  AND timestamp <= ?\n"
+		args = append(args, to)
+	}
+	row := s.conn.QueryRow(ctx, query, args...)
 	var minTs, maxTs time.Time
-	var count int64
+	var count uint64
 	if err := row.Scan(&minTs, &maxTs, &count); err != nil {
 		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: range scan: %w", err)
 	}
-	return minTs, maxTs, count, nil
+	return minTs, maxTs, int64(count), nil
 }
 
 func (s *Store) namesForSensors(ids []int64) ([]string, error) {
@@ -250,11 +265,11 @@ func (s *Store) refreshFilter(ctx context.Context, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	if err := s.conn.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s", filterTable)); err != nil {
-		return fmt.Errorf("clickhouse: drop filter table: %w", err)
-	}
-	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE %s (name String)", filterTable)); err != nil {
+	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE IF NOT EXISTS %s (name String)", filterTable)); err != nil {
 		return fmt.Errorf("clickhouse: create filter table: %w", err)
+	}
+	if err := s.conn.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: truncate filter table: %w", err)
 	}
 	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s (name)", filterTable))
 	if err != nil {
@@ -289,16 +304,6 @@ WHERE name IN (SELECT name FROM %s)
   AND timestamp >= @from
   AND timestamp < @to
 ORDER BY timestamp, name;
-`
-
-const rangeSQL = `
-SELECT min(timestamp) AS min_ts,
-       max(timestamp) AS max_ts,
-       count(DISTINCT sensor_id) AS sensor_count
-FROM %s
-WHERE name IN (SELECT name FROM %s)
-  AND (@from = '0001-01-01 00:00:00' OR timestamp >= @from)
-  AND (@to = '0001-01-01 00:00:00' OR timestamp <= @to);
 `
 
 func IsSource(dsn string) bool {

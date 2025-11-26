@@ -34,6 +34,14 @@ CLI принимает флаг `--confile` с путём к XML/JSON и `--slis
 go run ./cmd/timemachine --http-addr :8080 --db ... --confile config/test.xml --slist "Sensor?????_S" --output http --sm-url http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc
 ```
 
+Быстрый пример (демо ClickHouse + stdout + UI на 9090):
+
+```bash
+go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
+  --db clickhouse://default:@localhost:9000/uniset --ch-table uniset.main_history \
+  --confile config/test.xml --slist ALL --ws-batch-time 100ms
+```
+
 Далее управляйте через HTTP (start/pause/resume/step/seek/apply/snapshot, status/state). Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 Встроенный UI доступен по `/ui/`: включает кнопки Smoke/Flow для быстрого сценария, зелёный индикатор «идёт тестирование…» в панели статусов и выгрузку лога теста в JSON (кнопка появляется только если лог сохранён). Добавлена вкладка «Графики» на uPlot для выбранных датчиков (выбор по id/name, легенда/оси, быстрый буфер обновлений).
 
@@ -77,6 +85,14 @@ output:
 ```
 
 Секции `database`, `sensors` и `output` автоматически маппятся на флаги (`database.dsn → --db`, `database.table → --ch-table`, `sensors.selector → --slist`, `output.sm_url → --sm-url`, `output.batch_size → --batch-size`, `output.verbose → -v`). Можно добавлять и плоские ключи (например, `batch-size: 256`). Запускайте `go run ./cmd/timemachine --config-yaml config/config.yaml ...` и переопределяйте только необходимые флаги в CLI.
+
+Сгенерировать пример YAML со всеми основными полями можно командой:
+
+```bash
+make gen-config-example    # создаст config/config-example.yaml
+go run ./cmd/timemachine --generate-config config/custom.yaml  # встроенный генератор
+```
+Или вручную: `./scripts/gen-config-example.sh config/custom.yaml`.
 
 ## Подключение к БД
 

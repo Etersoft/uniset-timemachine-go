@@ -79,6 +79,8 @@
     tbody tr.changed { position: relative; }
     tbody tr.changed td:first-child { position: relative; }
     tbody tr.changed td:first-child::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: #1c93d3; opacity: 0.9; }
+    tbody tr.selected { background: rgba(34,211,238,0.12); }
+    tbody tr.selected:nth-child(even) { background: rgba(34,211,238,0.14); }
     td.value { font-family: "JetBrains Mono", ui-monospace, monospace; width: 140px; white-space: nowrap; }
     th.value { width: 140px; }
     .table-meta { color: #94a3b8; font-size: 13px; }
@@ -216,12 +218,19 @@
       <div class="card">
         <div class="row center" style="justify-content:flex-start; gap:12px; flex-wrap:wrap;">
           <input id="tableFilter" type="text" placeholder="Введите имя или текст..." style="max-width:340px; flex:0 0 auto;">
-          <span class="table-meta" id="tableMeta" style="min-width:160px;">—</span>
+          <span class="table-meta" id="tableMeta" style="min-width:220px;">—</span>
+        </div>
+        <div class="row center" style="justify-content:flex-start; gap:12px; flex-wrap:wrap; margin-top:6px;">
+          <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px; display:inline-flex; align-items:center; gap:6px;">
+            <input id="tableShowSelected" type="checkbox" style="width:auto; margin:0;">
+            Только выбранные
+          </label>
         </div>
         <div class="table-wrap" style="margin-top:12px;">
           <table>
             <thead>
               <tr>
+                <th style="width:40px; text-align:center;"><input id="tableSelectAll" type="checkbox" style="width:auto; margin:0;"></th>
                 <th style="width:180px;">Name</th>
                 <th class="value">
                   Value
@@ -431,6 +440,8 @@
         filter: document.getElementById('tableFilter'),
         meta: document.getElementById('tableMeta'),
         precision: document.getElementById('tablePrecision'),
+        showSelected: document.getElementById('tableShowSelected'),
+        selectAll: document.getElementById('tableSelectAll'),
       },
       charts: {
         sensors: document.getElementById('chartSensors'),
@@ -486,14 +497,16 @@
       }
     };
 
-    const tableState = {
-      rows: new Map(),
-      meta: new Map(),
-      filter: '',
-      lastStep: '-',
-      lastTs: '-',
-      precision: 3,
-    };
+  const tableState = {
+    rows: new Map(),
+    meta: new Map(),
+    filter: '',
+    lastStep: '-',
+    lastTs: '-',
+    precision: 3,
+    selected: new Set(),
+    showSelectedOnly: false,
+  };
     const chartState = {
       selected: [],
       datasets: new Map(), // id -> {label,color,data: [{x,y}], lastValue}
@@ -695,8 +708,7 @@
       }, 50);
     }
 
-    function renderTable(force) {
-      if (!els.table.body) return;
+    function getFilteredTableRows(applySelected = true) {
       const filter = (tableState.filter || '').trim();
       const useMeta = !!filter;
       const baseRows = useMeta
@@ -715,35 +727,51 @@
             };
           })
         : Array.from(tableState.rows.values());
-      const filtered = filter
+      let filtered = filter
         ? baseRows.filter(r => {
             const name = (r.name || '').toLowerCase();
             const textname = (r.textname || '').toLowerCase();
             return name.includes(filter) || textname.includes(filter);
           })
         : baseRows;
+      if (applySelected && tableState.showSelectedOnly) {
+        filtered = filtered.filter(r => tableState.selected.has(r.id));
+      }
       filtered.sort((a, b) => {
         if (a.name === b.name) return a.id - b.id;
         return a.name.localeCompare(b.name);
       });
+      return filtered;
+    }
+
+    function renderTable(force) {
+      if (!els.table.body) return;
+      const filtered = getFilteredTableRows(true);
       const now = Date.now();
       const html = filtered.map(r => {
         const isChanged = r.changedAt && now - r.changedAt < 4000;
         const value = r.hasValue ? formatTableValue(r.value) : '—';
         const metaText = tableState.meta.get(r.id)?.textname || sensorIndex.byId.get(r.id)?.textname || '';
         const text = r.textname || metaText || '';
-        return `<tr class="${isChanged ? 'changed' : ''}"><td>${r.name || ''}</td><td class="value">${value}</td><td>${text}</td></tr>`;
+        const checked = tableState.selected.has(r.id) ? 'checked' : '';
+        const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`;
+        return `<tr class="${rowClass.trim()}"><td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.id}" ${checked}></td><td>${r.name || ''}</td><td class="value">${value}</td><td>${text}</td></tr>`;
       }).join('');
-      els.table.body.innerHTML = html || `<tr><td colspan="3" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
+      els.table.body.innerHTML = html || `<tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
       if (els.table.meta) {
         const ts = tableState.lastTs || '—';
-        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts} · ${filtered.length} строк`;
+        const total = getFilteredTableRows(false).length;
+        const sel = tableState.selected.size;
+        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts} · ${filtered.length}/${total} строк · Выбрано: ${sel}`;
       }
       if (els.table.filter) {
         setDisabled(els.table.filter, false);
       }
       if (els.table.precision) {
         els.table.precision.value = String(tableState.precision ?? 3);
+      }
+      if (els.table.showSelected) {
+        els.table.showSelected.checked = tableState.showSelectedOnly;
       }
     }
 
@@ -1134,7 +1162,20 @@
           scales: {
             x: {
               type: 'time',
-              time: {unit: 'second'},
+              time: {
+                unit: 'second',
+                displayFormats: {
+                  millisecond: 'HH:mm:ss.SSS',
+                  second: 'HH:mm:ss',
+                  minute: 'HH:mm:ss',
+                  hour: 'HH:mm',
+                  day: 'yyyy-MM-dd',
+                  week: 'yyyy-MM-dd',
+                  month: 'yyyy-MM',
+                  quarter: 'yyyy-MM',
+                  year: 'yyyy',
+                },
+              },
               min: hasRange ? chartState.range.from : undefined,
               max: hasRange ? chartState.range.to : undefined,
               ticks: {color: '#94a3b8'},
@@ -1754,12 +1795,47 @@
           }
         });
       }
+      if (els.table.showSelected) {
+        els.table.showSelected.addEventListener('change', () => {
+          tableState.showSelectedOnly = !!els.table.showSelected.checked;
+          renderTable(true);
+        });
+      }
+      if (els.table.selectAll) {
+        els.table.selectAll.addEventListener('change', () => {
+          if (els.table.selectAll.checked) {
+            getFilteredTableRows(false).forEach(r => tableState.selected.add(r.id));
+          } else {
+            tableState.selected.clear();
+          }
+          tableState.showSelectedOnly = tableState.selected.size > 0;
+          renderTable(true);
+        });
+      }
       if (els.table.precision) {
         els.table.precision.addEventListener('change', () => {
           const v = Number(els.table.precision.value);
           tableValuePrecision = Number.isFinite(v) ? v : 3;
           tableState.precision = tableValuePrecision;
           renderTable(true);
+        });
+      }
+      if (els.table.body) {
+        els.table.body.addEventListener('change', (e) => {
+          const target = e.target;
+          if (!target || !target.matches('input.table-select')) return;
+          const id = Number(target.dataset.sensor);
+          if (!Number.isFinite(id)) return;
+          if (target.checked) {
+            tableState.selected.add(id);
+          } else {
+            tableState.selected.delete(id);
+          }
+          tableState.showSelectedOnly = tableState.selected.size > 0 ? tableState.showSelectedOnly || true : false;
+          if (!tableState.showSelectedOnly && tableState.selected.size === 0 && els.table.showSelected) {
+            els.table.showSelected.checked = false;
+          }
+          renderTable(false);
         });
       }
       if (els.rangePicker) {

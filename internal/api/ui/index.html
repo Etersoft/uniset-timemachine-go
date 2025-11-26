@@ -83,10 +83,13 @@
     tbody tr.selected:nth-child(even) { background: rgba(34,211,238,0.14); }
     td.value { font-family: "JetBrains Mono", ui-monospace, monospace; width: 140px; white-space: nowrap; }
     th.value { width: 140px; }
+    .table-graph-btn { padding: 6px 10px; background: #0f172a; border: 1px solid #1f2937; border-radius: 8px; color: #e5e7eb; cursor: pointer; min-width: 38px; text-align: center; }
+    .table-graph-btn:hover { border-color: #22d3ee; color: #22d3ee; }
     .table-meta { color: #94a3b8; font-size: 13px; }
     .badge { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid #1f2937; }
     .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
     .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 320px; margin: 0 auto; position: relative; overflow: hidden; }
+    .chart-box.step { height: 220px; min-height: 160px; }
     .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .chart-controls input { max-width: 320px; }
     .chart-meta { color: #94a3b8; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -220,12 +223,6 @@
           <input id="tableFilter" type="text" placeholder="Введите имя или текст..." style="max-width:340px; flex:0 0 auto;">
           <span class="table-meta" id="tableMeta" style="min-width:220px;">—</span>
         </div>
-        <div class="row center" style="justify-content:flex-start; gap:12px; flex-wrap:wrap; margin-top:6px;">
-          <label class="toggle" style="padding:4px 8px; border:1px solid #1f2937; border-radius:10px; display:inline-flex; align-items:center; gap:6px;">
-            <input id="tableShowSelected" type="checkbox" style="width:auto; margin:0;">
-            Только выбранные
-          </label>
-        </div>
         <div class="table-wrap" style="margin-top:12px;">
           <table>
             <thead>
@@ -247,6 +244,7 @@
                   </select>
                 </th>
                 <th>Text</th>
+                <th style="width:60px; text-align:center;"></th>
               </tr>
             </thead>
             <tbody id="tableBody"></tbody>
@@ -285,6 +283,10 @@
             <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
           </div>
           <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
+          <div class="chart-box step" id="chartBoxStep" style="height:220px; margin-top:12px;">
+            <canvas id="chartCanvasStep" style="width:100%; height:100%;"></canvas>
+          </div>
+          <div class="resize-handle chart-resize-handle" id="chartResizeHandleStep" title="Потяните, чтобы изменить высоту дискретного графика"></div>
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
           <div class="chart-legend-wrap" id="chartLegendWrap" style="height:180px; overflow-y:auto; overflow-x:hidden;">
             <table class="chart-legend-table" id="chartLegendTable">
@@ -440,7 +442,6 @@
         filter: document.getElementById('tableFilter'),
         meta: document.getElementById('tableMeta'),
         precision: document.getElementById('tablePrecision'),
-        showSelected: document.getElementById('tableShowSelected'),
         selectAll: document.getElementById('tableSelectAll'),
       },
       charts: {
@@ -451,8 +452,11 @@
         suggestions: document.getElementById('chartSensorsSuggestions'),
         suggestBox: document.getElementById('chartSuggestionsBox'),
         canvas: document.getElementById('chartCanvas'),
+        stepCanvas: document.getElementById('chartCanvasStep'),
         box: document.getElementById('chartBox'),
+        boxStep: document.getElementById('chartBoxStep'),
         resizeHandle: document.getElementById('chartResizeHandle'),
+        resizeHandleStep: document.getElementById('chartResizeHandleStep'),
         legendBody: document.getElementById('chartLegendBody'),
         legendWrap: document.getElementById('chartLegendWrap'),
         legendHandle: document.getElementById('legendResizeHandle'),
@@ -505,12 +509,12 @@
     lastTs: '-',
     precision: 3,
     selected: new Set(),
-    showSelectedOnly: false,
   };
     const chartState = {
       selected: [],
       datasets: new Map(), // id -> {label,color,data: [{x,y}], lastValue}
       chart: null,
+      chartStep: null,
       maxPoints: 800,
       autoUpdate: true,
       smooth: true,
@@ -540,6 +544,13 @@
 
   function clamp(v, min, max) {
     return Math.min(Math.max(v, min), max);
+  }
+
+  function toStepValue(v) {
+    if (v === null || v === undefined) return null;
+    const num = Number(v);
+    if (!Number.isFinite(num)) return null;
+    return num > 0 ? 1 : 0;
   }
 
   function formatChartValue(v) {
@@ -708,6 +719,14 @@
       }, 50);
     }
 
+    function clearTableFilter() {
+      if (!els.table.filter) return;
+      els.table.filter.value = '';
+      tableState.filter = '';
+      els.table.filter.blur();
+      scheduleRenderTable(true);
+    }
+
     function getFilteredTableRows(applySelected = true) {
       const filter = (tableState.filter || '').trim();
       const useMeta = !!filter;
@@ -734,7 +753,8 @@
             return name.includes(filter) || textname.includes(filter);
           })
         : baseRows;
-      if (applySelected && tableState.showSelectedOnly) {
+      const applySelection = applySelected && tableState.selected.size > 0 && !filter;
+      if (applySelection) {
         filtered = filtered.filter(r => tableState.selected.has(r.id));
       }
       filtered.sort((a, b) => {
@@ -755,9 +775,15 @@
         const text = r.textname || metaText || '';
         const checked = tableState.selected.has(r.id) ? 'checked' : '';
         const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`;
-        return `<tr class="${rowClass.trim()}"><td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.id}" ${checked}></td><td>${r.name || ''}</td><td class="value">${value}</td><td>${text}</td></tr>`;
+        return `<tr class="${rowClass.trim()}">
+          <td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.id}" ${checked}></td>
+          <td>${r.name || ''}</td>
+          <td class="value">${value}</td>
+          <td>${text}</td>
+          <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.id}" title="Добавить на график">📊</button></td>
+        </tr>`;
       }).join('');
-      els.table.body.innerHTML = html || `<tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
+      els.table.body.innerHTML = html || `<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
       if (els.table.meta) {
         const ts = tableState.lastTs || '—';
         const total = getFilteredTableRows(false).length;
@@ -770,8 +796,11 @@
       if (els.table.precision) {
         els.table.precision.value = String(tableState.precision ?? 3);
       }
-      if (els.table.showSelected) {
-        els.table.showSelected.checked = tableState.showSelectedOnly;
+      if (els.table.selectAll) {
+        const base = getFilteredTableRows(false);
+        const allSelected = base.length > 0 && base.every(r => tableState.selected.has(r.id));
+        els.table.selectAll.checked = allSelected && tableState.selected.size > 0;
+        els.table.selectAll.indeterminate = tableState.selected.size > 0 && !allSelected;
       }
     }
 
@@ -1059,6 +1088,33 @@
       }));
     }
 
+    function getStepOffsets() {
+      const offsets = new Map();
+      chartState.selected.forEach((id, idx) => offsets.set(id, idx));
+      return offsets;
+    }
+
+    function buildStepDatasets() {
+      const offsets = getStepOffsets();
+      return Array.from(chartState.datasets.values()).map(ds => ({
+        label: ds.label,
+        data: (ds.data || []).map(p => {
+          const step = toStepValue(p.y);
+          const offset = offsets.get(ds.id) || 0;
+          return { x: p.x, y: step === null ? null : offset + step };
+        }),
+        borderColor: ds.color || '#22d3ee',
+        backgroundColor: 'transparent',
+        tension: 0,
+        stepped: true,
+        spanGaps: true,
+        pointRadius: 0,
+        borderWidth: 1,
+        fill: false,
+        hidden: chartState.focused !== null && chartState.focused !== ds.id,
+      }));
+    }
+
     function hexToRGBA(hex, alpha) {
       if (!hex) return hex;
       const h = hex.replace('#', '');
@@ -1081,15 +1137,90 @@
     }
 
     function syncChartData() {
-      if (!chartState.chart) return;
-      chartState.chart.data.labels = extractChartLabels();
-      chartState.chart.data.datasets = buildChartDatasets();
       const hasRange = chartState.range.from && chartState.range.to;
-      chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
-      chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
-      chartState.chart.update('none');
+      if (chartState.chart) {
+        chartState.chart.data.labels = extractChartLabels();
+        chartState.chart.data.datasets = buildChartDatasets();
+        chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
+        chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        chartState.chart.update('none');
+      }
+      if (chartState.chartStep) {
+        chartState.chartStep.data.labels = extractChartLabels();
+        chartState.chartStep.data.datasets = buildStepDatasets();
+        chartState.chartStep.options.scales.x.min = hasRange ? chartState.range.from : undefined;
+        chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        const tracks = Math.max(chartState.selected.length, 1);
+        chartState.chartStep.options.scales.y.min = 0;
+        chartState.chartStep.options.scales.y.max = tracks + 0.5;
+        chartState.chartStep.update('none');
+      }
       updateChartMeta();
       renderLegendTable();
+    }
+
+    function rebuildStepChart(hasRange) {
+      if (!els.charts.stepCanvas) return;
+      const container = els.charts.stepCanvas.parentElement || els.charts.stepCanvas;
+      const rawW = container.clientWidth || container.offsetWidth || 0;
+      const rawH = container.clientHeight || container.offsetHeight || 0;
+      const width = Math.max(320, Math.floor(rawW || 800));
+      const height = Math.max(160, Math.floor(rawH || 200));
+      if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+        return;
+      }
+      destroyStepChart();
+      if (!window.Chart) return;
+      const ctx = els.charts.stepCanvas.getContext('2d');
+      els.charts.stepCanvas.width = width;
+      els.charts.stepCanvas.height = height;
+      const labels = extractChartLabels();
+      const datasets = buildStepDatasets();
+      const tracks = Math.max(chartState.selected.length, 1);
+      chartState.chartStep = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: {
+          animation: false,
+          responsive: false,
+          maintainAspectRatio: false,
+          parsing: false,
+          resizeDelay: 0,
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: 'second',
+                displayFormats: {
+                  millisecond: 'HH:mm:ss.SSS',
+                  second: 'HH:mm:ss',
+                  minute: 'HH:mm:ss',
+                  hour: 'HH:mm',
+                  day: 'yyyy-MM-dd',
+                  week: 'yyyy-MM-dd',
+                  month: 'yyyy-MM',
+                  quarter: 'yyyy-MM',
+                  year: 'yyyy',
+                },
+              },
+              min: hasRange ? chartState.range.from : undefined,
+              max: hasRange ? chartState.range.to : undefined,
+              ticks: { color: '#94a3b8' },
+              grid: { color: 'rgba(255,255,255,0.05)' },
+            },
+            y: {
+              ticks: { color: '#94a3b8', stepSize: 1, callback: (val) => (val % 1 === 0 ? '1' : '') },
+              min: 0,
+              max: tracks + 0.5,
+              grid: {
+                color: 'rgba(255,255,255,0.05)',
+                borderColor: 'rgba(255,255,255,0.08)',
+              },
+            },
+          },
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+        },
+      });
     }
 
     function scheduleChartSync() {
@@ -1140,6 +1271,7 @@
         return;
       }
       destroyChart();
+      destroyStepChart();
       chartState.lastSkip = '';
       if (!window.Chart) {
         console.error('[chart] Chart.js not loaded');
@@ -1211,6 +1343,7 @@
         },
       });
       chartLog('rebuild chart', { width, height, datasets: chartState.datasets.size });
+      rebuildStepChart(hasRange);
       updateChartMeta();
       renderLegendTable();
     }
@@ -1221,6 +1354,15 @@
       if (chartState.chart) {
         chartState.chart.destroy();
         chartState.chart = null;
+      }
+    }
+
+    function destroyStepChart() {
+      const existing = (window.Chart && typeof Chart.getChart === 'function') ? Chart.getChart(els.charts.stepCanvas) : null;
+      if (existing) existing.destroy();
+      if (chartState.chartStep) {
+        chartState.chartStep.destroy();
+        chartState.chartStep = null;
       }
     }
 
@@ -1791,24 +1933,24 @@
         els.table.filter.addEventListener('keydown', (e) => {
           if (e.key === 'Escape') {
             e.preventDefault();
-            e.target.blur();
+            clearTableFilter();
           }
         });
-      }
-      if (els.table.showSelected) {
-        els.table.showSelected.addEventListener('change', () => {
-          tableState.showSelectedOnly = !!els.table.showSelected.checked;
-          renderTable(true);
+        els.table.filter.addEventListener('keyup', (e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            clearTableFilter();
+          }
         });
       }
       if (els.table.selectAll) {
         els.table.selectAll.addEventListener('change', () => {
+          const rows = getFilteredTableRows(false);
           if (els.table.selectAll.checked) {
-            getFilteredTableRows(false).forEach(r => tableState.selected.add(r.id));
+            rows.forEach(r => tableState.selected.add(r.id));
           } else {
             tableState.selected.clear();
           }
-          tableState.showSelectedOnly = tableState.selected.size > 0;
           renderTable(true);
         });
       }
@@ -1831,13 +1973,23 @@
           } else {
             tableState.selected.delete(id);
           }
-          tableState.showSelectedOnly = tableState.selected.size > 0 ? tableState.showSelectedOnly || true : false;
-          if (!tableState.showSelectedOnly && tableState.selected.size === 0 && els.table.showSelected) {
-            els.table.showSelected.checked = false;
-          }
           renderTable(false);
         });
+        els.table.body.addEventListener('click', (e) => {
+          const btn = e.target.closest('button[data-chart-add]');
+          if (!btn) return;
+          const id = Number(btn.dataset.chartAdd);
+          if (!Number.isFinite(id)) return;
+          const next = Array.from(new Set([...chartState.selected, id]));
+          applyChartSensors(next);
+        });
       }
+      document.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        const panelTable = document.getElementById('panel-table');
+        if (!panelTable || !panelTable.classList.contains('active')) return;
+        clearTableFilter();
+      });
       if (els.rangePicker) {
         els.rangePicker.addEventListener('click', () => openRangeDialog());
       }
@@ -2225,6 +2377,16 @@
             chartState.chart.resize();
             scheduleChartSync();
           }
+        },
+      });
+      setupVerticalResize({
+        handle: els.charts.resizeHandleStep,
+        target: els.charts.boxStep,
+        storageKey: 'chartStepHeightPx',
+        min: 140,
+        max: 500,
+        onChange: () => {
+          rebuildStepChart(chartState.range.from && chartState.range.to);
         },
       });
       setupVerticalResize({

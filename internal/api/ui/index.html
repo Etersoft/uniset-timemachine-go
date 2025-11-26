@@ -60,6 +60,7 @@
     .log { background: #0b1324; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; max-height: 280px; overflow: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: #e2e8f0; }
     .log-entry { padding: 7px 8px; border-radius: 8px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.03); }
     .log-entry.ok { border-color: rgba(16,185,129,0.4); }
+    .log-entry.warn { border-color: rgba(245,158,11,0.45); }
     .log-entry.err { border-color: rgba(248,113,113,0.45); }
     .log-entry .ts { color: #9ca3af; font-size: 11px; margin-bottom: 2px; }
     dialog { border: 1px solid #1f2937; background: #0f172a; color: #e2e8f0; border-radius: 12px; padding: 16px; min-width: 320px; box-shadow: 0 20px 60px rgba(0,0,0,0.55); }
@@ -546,30 +547,39 @@
     return Math.min(Math.max(v, min), max);
   }
 
+  function itemHasValue(item, hadValue = false) {
+    if (!item || typeof item !== 'object') return hadValue;
+    if (item.value !== undefined && item.value !== null) return true;
+    if (item.has_value !== undefined) return !!item.has_value || hadValue;
+    if (item.hasValue !== undefined) return !!item.hasValue || hadValue;
+    return hadValue;
+  }
+
   function toStepValue(v) {
-    if (v === null || v === undefined) return null;
+    if (v === null || v === undefined) return 0;
     const num = Number(v);
-    if (!Number.isFinite(num)) return null;
+    if (!Number.isFinite(num)) return 0;
     return num > 0 ? 1 : 0;
   }
 
   function formatChartValue(v) {
-    if (v === null || v === undefined) return '—';
+    if (v === null || v === undefined) return '0';
     const num = Number(v);
-    if (!Number.isFinite(num)) return '—';
+    if (!Number.isFinite(num)) return '0';
     return num.toFixed(chartValuePrecision);
   }
 
   function formatTableValue(v) {
-    if (v === null || v === undefined) return '—';
+    if (v === null || v === undefined) return '0';
     const num = Number(v);
-    if (!Number.isFinite(num)) return '—';
+    if (!Number.isFinite(num)) return '0';
     return num.toFixed(tableValuePrecision);
   }
 
-  function log(message, ok = true) {
+  function log(message, state = true) {
+      const level = typeof state === 'string' ? state : (state ? 'ok' : 'err');
       const row = document.createElement('div');
-      row.className = `log-entry ${ok ? 'ok' : 'err'}`;
+      row.className = `log-entry ${level}`;
       row.innerHTML = `<div class="ts">${new Date().toLocaleTimeString()}</div><div>${message}</div>`;
       els.log.prepend(row);
       while (els.log.children.length > 200) {
@@ -635,11 +645,11 @@
         tableState.lastTs = tsStr;
         state.pausedAtTs = tsStr;
       }
-      switch (msg.type) {
-        case 'reset':
-          tableState.rows.clear();
-          tableState.meta.clear();
-          scheduleRenderTable(true);
+    switch (msg.type) {
+      case 'reset':
+        tableState.rows.clear();
+        tableState.meta.clear();
+        scheduleRenderTable(true);
           break;
         case 'snapshot':
           applySnapshot(msg.updates || [], tsStr);
@@ -661,18 +671,16 @@
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
         registerSensorMeta(key, item.name, item.textname);
-        const hasValue = !!item.has_value || !!item.hasValue;
-        if (hasValue) {
-          tableState.rows.set(key, {
-            id: key,
-            name: item.name || `id${key}`,
-            textname: item.textname || '',
-            value: item.value,
-            hasValue: true,
-            stepID: tableState.lastStep || 0,
-            ts: tsStr || '',
-          });
-        }
+        const hasValue = itemHasValue(item);
+        tableState.rows.set(key, {
+          id: key,
+          name: item.name || `${key}`,
+          textname: item.textname || '',
+          value: item.value,
+          hasValue,
+          stepID: tableState.lastStep || 0,
+          ts: tsStr || '',
+        });
       });
       refreshChartSuggestions();
     }
@@ -687,14 +695,15 @@
         const hadValue = prev.hasValue;
         const changed = !hadValue || prev.value !== item.value;
         const meta = tableState.meta.get(key) || {};
-        const name = item.name || meta.name || prev.name || `id${key}`;
+        const name = item.name || meta.name || prev.name || `${key}`;
         registerSensorMeta(key, name, item.textname || meta.textname || prev.textname);
+        const hasValue = itemHasValue(item, hadValue);
         tableState.rows.set(key, {
           id: key,
           name,
           textname: item.textname || meta.textname || prev.textname || '',
           value: item.value,
-          hasValue: !!item.has_value || item.hasValue || hadValue,
+          hasValue,
           stepID: item.step_id || tableState.lastStep || prev.stepID || 0,
           ts: tsStr || tableState.lastTs || prev.ts || '',
           changedAt: changed ? now : prev.changedAt,
@@ -736,7 +745,7 @@
             const hasValue = !!row.hasValue;
             return {
               id,
-              name: meta.name || `id${id}`,
+              name: meta.name || `${id}`,
               textname: meta.textname || '',
               value: hasValue ? row.value : '—',
               hasValue,
@@ -843,13 +852,13 @@
     function chartLabelByID(id) {
       const meta = tableState.meta.get(id) || sensorIndex.byId.get(id) || {};
       if (meta.name) return `${meta.name} (${id})`;
-      return `id${id}`;
+      return `${id}`;
     }
 
     function registerSensorMeta(id, name, textname) {
       if (!Number.isFinite(id)) return;
       const prev = tableState.meta.get(id) || {};
-      const resolvedName = name || prev.name || `id${id}`;
+      const resolvedName = name || prev.name || `${id}`;
       const resolvedText = textname !== undefined ? textname : prev.textname;
       tableState.meta.set(id, { name: resolvedName, textname: resolvedText || '' });
       sensorIndex.byId.set(id, { id, name: resolvedName, textname: resolvedText || '' });
@@ -885,7 +894,7 @@
         const num = Number(id);
         if (!Number.isFinite(num)) return;
         if (!sensorIndex.byId.has(num)) {
-          registerSensorMeta(num, `id${num}`, '');
+          registerSensorMeta(num, `${num}`, '');
         }
         if (sensorIndex.byId.has(num)) res.push(num);
       });
@@ -998,8 +1007,8 @@
       const usedValues = new Set();
       sensorIndex.byId.forEach((meta, id) => {
         if (chartState.selected.includes(id)) return; // уже на графике
-        const label = meta?.name ? `${meta.name}` : `id${id}`;
-        const val = meta?.name || `id${id}`;
+        const label = meta?.name ? `${meta.name}` : `${id}`;
+        const val = meta?.name || `${id}`;
         if (!val || usedValues.has(val)) return;
         usedValues.add(val);
         opts.push({ value: val, label: `${label} (${id})` });
@@ -1022,7 +1031,7 @@
       let availableCount = 0;
       sensorIndex.byId.forEach((meta, id) => {
         if (chartState.selected.includes(id)) return;
-        const name = meta?.name || `id${id}`;
+        const name = meta?.name || `${id}`;
         const text = name.toLowerCase();
         if (q && !text.includes(q) && !String(id).includes(q)) return;
         items.push({ id, name });
@@ -1100,7 +1109,7 @@
         label: ds.label,
         data: (ds.data || []).map(p => {
           const step = toStepValue(p.y);
-          const offset = offsets.get(ds.id) || 0;
+          const offset = (offsets.get(ds.id) || 0) * 2;
           return { x: p.x, y: step === null ? null : offset + step };
         }),
         borderColor: ds.color || '#22d3ee',
@@ -1152,7 +1161,7 @@
         chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
         const tracks = Math.max(chartState.selected.length, 1);
         chartState.chartStep.options.scales.y.min = 0;
-        chartState.chartStep.options.scales.y.max = tracks + 0.5;
+        chartState.chartStep.options.scales.y.max = tracks * 2;
         chartState.chartStep.update('none');
       }
       updateChartMeta();
@@ -1209,16 +1218,44 @@
               grid: { color: 'rgba(255,255,255,0.05)' },
             },
             y: {
-              ticks: { color: '#94a3b8', stepSize: 1, callback: (val) => (val % 1 === 0 ? '1' : '') },
+              ticks: {
+                color: '#94a3b8',
+                stepSize: 1,
+                callback: (val) => {
+                  if (!Number.isInteger(val)) return '';
+                  return val % 2 === 0 ? '0' : '1';
+                },
+              },
               min: 0,
-              max: tracks + 0.5,
+              max: tracks * 2,
               grid: {
                 color: 'rgba(255,255,255,0.05)',
                 borderColor: 'rgba(255,255,255,0.08)',
               },
             },
           },
-          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              enabled: true,
+              displayColors: false,
+              mode: 'nearest',
+              intersect: false,
+              position: 'nearest',
+              callbacks: {
+                title: (items) => {
+                  const ts = items?.[0]?.parsed?.x;
+                  if (!Number.isFinite(ts)) return '';
+                  return new Date(ts).toISOString().replace(/\.\d{3}Z$/, 'Z');
+                },
+                label: (ctx) => {
+                  const v = Number.isFinite(ctx.parsed.y) ? ctx.parsed.y % 2 : 0;
+                  const val = v === 1 ? '1' : '0';
+                  return `${ctx.dataset?.label || ''}: ${val}`.trim();
+                },
+              },
+            },
+          },
         },
       });
     }
@@ -1469,8 +1506,9 @@
           usedColors.add(String(color).toLowerCase());
         }
         const ds = chartState.datasets.get(id);
-        const val = updateMap.has(id) ? updateMap.get(id) : ds.lastValue;
-        const y = val === undefined ? null : val;
+        const val = updateMap.has(id) ? updateMap.get(id) : (ds.lastValue ?? 0);
+        const numVal = Number.isFinite(Number(val)) ? Number(val) : 0;
+        const y = numVal;
         ds.lastValue = y;
         ds.lastTs = t;
         ds.data.push({x: t, y});
@@ -2412,7 +2450,7 @@
         if (Number.isFinite(cnt)) {
           rangeSensorCount = cnt;
           rangeSensorCountKnown = true;
-          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, true);
+          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, rangeSensorCount === 0 ? 'warn' : 'ok');
         } else {
           rangeSensorCount = Infinity;
           rangeSensorCountKnown = false;
@@ -2466,7 +2504,7 @@
         if (Number.isFinite(Number(data?.sensor_count))) {
           rangeSensorCount = Number(data.sensor_count);
           rangeSensorCountKnown = true;
-          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, true);
+          log(`Диапазон: найдено ${rangeSensorCount} датчиков`, rangeSensorCount === 0 ? 'warn' : 'ok');
         } else {
           rangeSensorCount = Infinity;
           rangeSensorCountKnown = false;

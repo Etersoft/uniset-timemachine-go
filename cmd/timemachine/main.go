@@ -40,6 +40,11 @@ type options struct {
 	chTable       string
 	batchSize     int
 	httpAddr      string
+	wsBatchTime   time.Duration
+	sqliteCacheMB int
+	sqliteWAL     bool
+	sqliteSyncOff bool
+	sqliteTempMem bool
 	verbose       bool
 	logCache      bool
 	version       bool
@@ -141,6 +146,11 @@ func parseFlags() options {
 	flag.StringVar(&opt.smParamPrefix, "sm-param-prefix", "id", "Prefix for sensor parameters (use empty to send raw IDs)")
 	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
 	flag.StringVar(&opt.httpAddr, "http-addr", "", "run HTTP control server on the given addr (e.g. :8080)")
+	flag.DurationVar(&opt.wsBatchTime, "ws-batch-time", 100*time.Millisecond, "WebSocket updates batch interval (e.g. 100ms)")
+	flag.IntVar(&opt.sqliteCacheMB, "sqlite-cache-mb", 100, "SQLite cache size (MB) for PRAGMA cache_size; 0 to skip")
+	flag.BoolVar(&opt.sqliteWAL, "sqlite-wal", true, "Enable SQLite WAL mode (PRAGMA journal_mode=WAL)")
+	flag.BoolVar(&opt.sqliteSyncOff, "sqlite-sync-off", true, "Set PRAGMA synchronous=OFF for SQLite")
+	flag.BoolVar(&opt.sqliteTempMem, "sqlite-temp-memory", true, "Set PRAGMA temp_store=MEMORY for SQLite")
 	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
 	flag.BoolVar(&opt.logCache, "log-cache", false, "log replay cache hits/misses")
 	flag.BoolVar(&opt.version, "version", false, "print version and exit")
@@ -204,7 +214,15 @@ func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors 
 
 	if sqliteStore.IsSource(opts.dbURL) {
 		src := sqliteStore.NormalizeSource(opts.dbURL)
-		sqlite, err := sqliteStore.New(ctx, sqliteStore.Config{Source: src})
+		sqlite, err := sqliteStore.New(ctx, sqliteStore.Config{
+			Source: src,
+			Pragmas: sqliteStore.Pragmas{
+				CacheMB:    opts.sqliteCacheMB,
+				WAL:        opts.sqliteWAL,
+				SyncOff:    opts.sqliteSyncOff,
+				TempMemory: opts.sqliteTempMem,
+			},
+		})
 		if err != nil {
 			log.Fatalf("sqlite storage error: %v", err)
 		}
@@ -356,7 +374,7 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 		Output:   initOutputClient(opt, cfg),
 		LogCache: opt.logCache,
 	}
-	streamer := api.NewStateStreamer()
+	streamer := api.NewStateStreamer(opt.wsBatchTime)
 	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer)
 	server := api.NewServer(manager, streamer)
 	addr := opt.httpAddr
@@ -407,35 +425,39 @@ func yamlKeyToFlag(key string) string {
 	key = strings.ToLower(key)
 	key = strings.ReplaceAll(key, "_", "-")
 	mapped := map[string]string{
-		"database.dsn":           "db",
-		"database.url":           "db",
-		"database.table":         "ch-table",
-		"database.step":          "step",
-		"database.window":        "window",
-		"database.speed":         "speed",
-		"database.batch-size":    "batch-size",
-		"sensors.selector":       "slist",
-		"sensors.slist":          "slist",
-		"sensors.list":           "slist",
-		"sensors.set":            "slist",
-		"sensors.config":         "confile",
-		"sensors.file":           "confile",
-		"sensors.confile":        "confile",
-		"sensors.from":           "from",
-		"sensors.to":             "to",
-		"output.mode":            "output",
-		"output.sm-url":          "sm-url",
-		"output.sm-supplier":     "sm-supplier",
-		"output.sm-param-mode":   "sm-param-mode",
-		"output.sm-param-prefix": "sm-param-prefix",
-		"output.batch-size":      "batch-size",
-		"output.verbose":         "v",
-		"http-addr":              "http-addr",
-		"http.addr":              "http-addr",
-		"http.address":           "http-addr",
-		"server.http-addr":       "http-addr",
-		"server.addr":            "http-addr",
-		"logging.cache":          "log-cache",
+		"database.dsn":                "db",
+		"database.url":                "db",
+		"database.table":              "ch-table",
+		"database.step":               "step",
+		"database.window":             "window",
+		"database.speed":              "speed",
+		"database.batch-size":         "batch-size",
+		"sensors.selector":            "slist",
+		"sensors.slist":               "slist",
+		"sensors.list":                "slist",
+		"sensors.set":                 "slist",
+		"sensors.config":              "confile",
+		"sensors.file":                "confile",
+		"sensors.confile":             "confile",
+		"sensors.from":                "from",
+		"sensors.to":                  "to",
+		"output.mode":                 "output",
+		"output.sm-url":               "sm-url",
+		"output.sm-supplier":          "sm-supplier",
+		"output.sm-param-mode":        "sm-param-mode",
+		"output.sm-param-prefix":      "sm-param-prefix",
+		"output.batch-size":           "batch-size",
+		"output.verbose":              "v",
+		"database.sqlite.cache-mb":    "sqlite-cache-mb",
+		"database.sqlite.wal":         "sqlite-wal",
+		"database.sqlite.sync-off":    "sqlite-sync-off",
+		"database.sqlite.temp-memory": "sqlite-temp-memory",
+		"http-addr":                   "http-addr",
+		"http.addr":                   "http-addr",
+		"http.address":                "http-addr",
+		"server.http-addr":            "http-addr",
+		"server.addr":                 "http-addr",
+		"logging.cache":               "log-cache",
 	}
 	if flagName, ok := mapped[key]; ok {
 		return flagName

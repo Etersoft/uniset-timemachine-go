@@ -5,6 +5,11 @@ database:
   step: 150ms
   window: 2s
   speed: 400
+  sqlite:
+    cache-mb: 500    # размер кеша SQLite в MB (cache_size)
+    wal: true        # journal_mode=WAL
+    sync-off: true   # synchronous=OFF
+    temp-memory: true # temp_store=MEMORY
 
 http:
   addr: :8080

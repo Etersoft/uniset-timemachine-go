@@ -555,6 +555,23 @@
     return hadValue;
   }
 
+  function normalizeUpdates(msg) {
+    if (Array.isArray(msg?.u)) {
+      return msg.u
+        .map((row) => {
+          const id = Number(row?.[0]);
+          if (!Number.isFinite(id)) return null;
+          const value = row?.[1];
+          const has = (row?.length || 0) > 2 ? row[2] !== 0 : true;
+          return { id, value, has_value: has };
+        })
+        .filter(Boolean);
+    }
+    if (Array.isArray(msg?.updates)) return msg.updates;
+    if (Array.isArray(msg?.Updates)) return msg.Updates;
+    return [];
+  }
+
   function toStepValue(v) {
     if (v === null || v === undefined) return 0;
     const num = Number(v);
@@ -645,6 +662,7 @@
         tableState.lastTs = tsStr;
         state.pausedAtTs = tsStr;
       }
+    const normalizedUpdates = normalizeUpdates(msg);
     switch (msg.type) {
       case 'reset':
         tableState.rows.clear();
@@ -656,8 +674,8 @@
           appendChartPoint(tsStr, msg.updates || []);
           break;
         case 'updates':
-          applyTableUpdates(msg.updates || [], tsStr);
-          appendChartPoint(tsStr, msg.updates || []);
+          applyTableUpdates(normalizedUpdates, tsStr);
+          appendChartPoint(tsStr, normalizedUpdates);
           break;
         default:
           break;
@@ -685,9 +703,9 @@
       refreshChartSuggestions();
     }
 
-    function applyTableUpdates(list, tsStr) {
-      if (!Array.isArray(list)) return;
-      const now = Date.now();
+  function applyTableUpdates(list, tsStr) {
+    if (!Array.isArray(list)) return;
+    const now = Date.now();
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;

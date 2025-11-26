@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -18,11 +19,22 @@ const (
 )
 
 type Config struct {
-	Source string
+	Source  string
+	Pragmas Pragmas
+}
+
+// Pragmas настраивают кеш и режимы SQLite.
+type Pragmas struct {
+	CacheMB    int  // cache_size в мегабайтах (<=0 чтобы пропустить)
+	WAL        bool // journal_mode=WAL
+	SyncOff    bool // synchronous=OFF
+	TempMemory bool // temp_store=MEMORY
 }
 
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	stmtWarmup *sql.Stmt
+	stmtWindow *sql.Stmt
 }
 
 func New(ctx context.Context, cfg Config) (*Store, error) {
@@ -37,8 +49,20 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("sqlite: ping: %w", err)
 	}
+	if err := applyPragmas(ctx, db, cfg.Pragmas); err != nil {
+		db.Close()
+		return nil, err
+	}
 	store := &Store{db: db}
 	if err := store.ensureFilterTable(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := store.ensureIndexes(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := store.prepareStatements(ctx); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -46,6 +70,12 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 }
 
 func (s *Store) Close() {
+	if s.stmtWarmup != nil {
+		s.stmtWarmup.Close()
+	}
+	if s.stmtWindow != nil {
+		s.stmtWindow.Close()
+	}
 	if s.db != nil {
 		s.db.Close()
 	}
@@ -57,7 +87,7 @@ func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]
 	}
 
 	args := []any{from.UnixMicro()}
-	rows, err := s.db.QueryContext(ctx, warmupSQL, args...)
+	rows, err := s.stmtWarmup.QueryContext(ctx, args...)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: warmup query: %w", err)
 	}
@@ -110,7 +140,7 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 				next = req.To
 			}
 
-			rows, err := s.db.QueryContext(ctx, windowSQL, cursor.UnixMicro(), next.UnixMicro())
+			rows, err := s.stmtWindow.QueryContext(ctx, cursor.UnixMicro(), next.UnixMicro())
 			if err != nil {
 				errCh <- fmt.Errorf("sqlite: window query: %w", err)
 				return
@@ -172,6 +202,31 @@ func (s *Store) ensureFilterTable(ctx context.Context) error {
 	return nil
 }
 
+func (s *Store) ensureIndexes(ctx context.Context) error {
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_main_history_sensor_ts ON main_history(sensor_id, timestamp, time_usec)`,
+	}
+	for _, q := range indexes {
+		if _, err := s.db.ExecContext(ctx, q); err != nil {
+			return fmt.Errorf("sqlite: create index: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) prepareStatements(ctx context.Context) error {
+	var err error
+	s.stmtWarmup, err = s.db.PrepareContext(ctx, warmupSQL)
+	if err != nil {
+		return fmt.Errorf("sqlite: prepare warmup: %w", err)
+	}
+	s.stmtWindow, err = s.db.PrepareContext(ctx, windowSQL)
+	if err != nil {
+		return fmt.Errorf("sqlite: prepare window: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) resetFilter(ctx context.Context, sensors []int64) error {
 	if err := s.ensureFilterTable(ctx); err != nil {
 		return err
@@ -205,6 +260,31 @@ func (s *Store) resetFilter(ctx context.Context, sensors []int64) error {
 	return nil
 }
 
+func applyPragmas(ctx context.Context, db *sql.DB, p Pragmas) error {
+	var pragmas []string
+	if p.WAL {
+		pragmas = append(pragmas, `PRAGMA journal_mode=WAL`)
+	}
+	if p.SyncOff {
+		pragmas = append(pragmas, `PRAGMA synchronous=OFF`)
+	}
+	if p.TempMemory {
+		pragmas = append(pragmas, `PRAGMA temp_store=MEMORY`)
+	}
+	if p.CacheMB > 0 {
+		// отрицательное значение — задаёт размер в килобайтах
+		cacheKB := -p.CacheMB * 1024
+		pragmas = append(pragmas, fmt.Sprintf(`PRAGMA cache_size=%d`, cacheKB))
+	}
+	for _, p := range pragmas {
+		if _, err := db.ExecContext(ctx, p); err != nil {
+			log.Printf("sqlite: pragma failed (%s): %v", p, err)
+			// не фейлим init, просто логируем
+		}
+	}
+	return nil
+}
+
 func parseTimestamp(raw string, usec int64) (time.Time, error) {
 	layouts := []string{
 		time.RFC3339Nano,
@@ -223,18 +303,26 @@ func parseTimestamp(raw string, usec int64) (time.Time, error) {
 }
 
 const warmupSQL = `
-WITH ranked AS (
+WITH base AS (
 	SELECT sensor_id,
 	       timestamp AS ts,
 	       COALESCE(time_usec, 0) AS usec,
+	       (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) AS ts_micro,
+	       value
+	FROM main_history
+	WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
+),
+ranked AS (
+	SELECT sensor_id,
+	       ts,
+	       usec,
 	       value,
 	       ROW_NUMBER() OVER (
 	           PARTITION BY sensor_id
-	           ORDER BY timestamp DESC, COALESCE(time_usec, 0) DESC
+	           ORDER BY ts_micro DESC
 	       ) AS rn
-	FROM main_history
-	WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
-	  AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) <= ?
+	FROM base
+	WHERE ts_micro <= ?
 )
 SELECT sensor_id, ts, usec, value
 FROM ranked
@@ -242,15 +330,23 @@ WHERE rn = 1;
 `
 
 const windowSQL = `
+WITH base AS (
+	SELECT sensor_id,
+	       timestamp,
+	       COALESCE(time_usec, 0) AS usec,
+	       (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) AS ts_micro,
+	       value
+	FROM main_history
+	WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
+)
 SELECT sensor_id,
        timestamp,
-       COALESCE(time_usec, 0) AS usec,
+       usec,
        value
-FROM main_history
-WHERE sensor_id IN (SELECT sensor_id FROM ` + filterTable + `)
-  AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) >= ?
-  AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) < ?
-ORDER BY timestamp, usec, sensor_id;
+FROM base
+WHERE ts_micro >= ?
+  AND ts_micro < ?
+ORDER BY ts_micro, sensor_id;
 `
 
 func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {

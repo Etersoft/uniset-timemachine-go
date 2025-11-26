@@ -40,8 +40,10 @@ type wsMessage struct {
 	Type     string        `json:"type"`
 	StepID   int64         `json:"step_id,omitempty"`
 	StepTs   string        `json:"step_ts,omitempty"`
-	StepUnix int64         `json:"step_unix,omitempty"`
+	StepUnix uint64        `json:"step_unix,omitempty"`
 	Updates  []wsSensorRow `json:"updates,omitempty"`
+	// U — компактный формат обновлений: [id, value, hasValue(0/1)]
+	U [][]float64 `json:"u,omitempty"`
 }
 
 type wsSensorRow struct {
@@ -60,14 +62,24 @@ type StateStreamer struct {
 	clients map[*wsClient]struct{}
 	lastID  int64
 	lastTs  time.Time
+
+	batchInterval time.Duration
+	batchRows     map[int64]wsSensorRow
+	batchStep     replay.StepInfo
+	batchTimer    *time.Timer
 }
 
 // NewStateStreamer создаёт пустой стример.
-func NewStateStreamer() *StateStreamer {
+func NewStateStreamer(batchInterval time.Duration) *StateStreamer {
+	if batchInterval <= 0 {
+		batchInterval = 100 * time.Millisecond
+	}
 	return &StateStreamer{
-		sensors: map[int64]SensorInfo{},
-		state:   map[int64]*sensorValue{},
-		clients: map[*wsClient]struct{}{},
+		sensors:       map[int64]SensorInfo{},
+		state:         map[int64]*sensorValue{},
+		clients:       map[*wsClient]struct{}{},
+		batchInterval: batchInterval,
+		batchRows:     map[int64]wsSensorRow{},
 	}
 }
 
@@ -100,6 +112,11 @@ func (s *StateStreamer) Reset(infos map[int64]SensorInfo) {
 	s.state = map[int64]*sensorValue{}
 	s.lastID = 0
 	s.lastTs = time.Time{}
+	s.batchRows = map[int64]wsSensorRow{}
+	if s.batchTimer != nil {
+		s.batchTimer.Stop()
+	}
+	s.batchTimer = nil
 	msg := wsMessage{Type: "reset"}
 	s.broadcastLocked(msg)
 	s.mu.Unlock()
@@ -137,18 +154,13 @@ func (s *StateStreamer) Publish(step replay.StepInfo, updates []sharedmem.Sensor
 		})
 	}
 
-	msg := wsMessage{
-		Type:     "updates",
-		StepID:   step.StepID,
-		StepTs:   step.StepTs.Format(time.RFC3339),
-		StepUnix: unixMs(step.StepTs),
-		Updates:  rows,
+	for _, r := range rows {
+		s.batchRows[r.ID] = r
 	}
-	// Даже при пустых обновлениях отправляем метаданные шага, чтобы UI видел прогресс.
-	if len(rows) == 0 {
-		msg.Updates = nil
+	s.batchStep = step
+	if s.batchTimer == nil {
+		s.startBatchTimerLocked()
 	}
-	s.broadcastLocked(msg)
 	s.mu.Unlock()
 }
 
@@ -267,11 +279,59 @@ func formatTime(ts time.Time) string {
 	return ts.UTC().Format(time.RFC3339)
 }
 
-func unixMs(ts time.Time) int64 {
+func unixMs(ts time.Time) uint64 {
 	if ts.IsZero() {
 		return 0
 	}
-	return ts.UTC().UnixMilli()
+	return uint64(ts.UTC().UnixMilli())
+}
+
+func (s *StateStreamer) startBatchTimerLocked() {
+	s.batchTimer = time.AfterFunc(s.batchInterval, func() {
+		s.flushBatch()
+	})
+}
+
+func (s *StateStreamer) flushBatch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.batchRows) == 0 {
+		s.batchTimer = nil
+		return
+	}
+
+	step := s.batchStep
+	rows := make([]wsSensorRow, 0, len(s.batchRows))
+	for _, r := range s.batchRows {
+		rows = append(rows, r)
+	}
+	// сбросим на следующий батч
+	s.batchRows = map[int64]wsSensorRow{}
+	if s.batchTimer != nil {
+		s.batchTimer.Stop()
+	}
+	s.batchTimer = nil
+
+	msg := wsMessage{
+		Type:     "updates",
+		StepID:   step.StepID,
+		StepUnix: unixMs(step.StepTs),
+	}
+
+	if len(rows) > 0 {
+		msg.U = make([][]float64, 0, len(rows))
+		for _, r := range rows {
+			has := 0.0
+			if r.HasValue {
+				has = 1.0
+			}
+			msg.U = append(msg.U, []float64{float64(r.ID), r.Value, has})
+		}
+	}
+
+	// Даже при пустых обновлениях отправляем метаданные шага, чтобы UI видел прогресс.
+	s.broadcastLocked(msg)
 }
 
 // --- WebSocket utils (минимальная реализация только для server-push) ---

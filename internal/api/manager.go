@@ -28,9 +28,11 @@ type Manager struct {
 }
 
 type defaults struct {
-	speed     float64
-	window    time.Duration
-	batchSize int
+	speed       float64
+	window      time.Duration
+	batchSize   int
+	saveOutput  bool
+	saveAllowed bool
 }
 
 type pendingState struct {
@@ -53,15 +55,17 @@ type job struct {
 }
 
 // NewManager создаёт менеджер с заданным сервисом и списком датчиков.
-func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer) *Manager {
+func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer, saveAllowed bool, defaultSave bool) *Manager {
 	info := BuildSensorInfo(cfg, sensors)
 	return &Manager{
 		service: service,
 		sensors: sensors,
 		defaults: defaults{
-			speed:     speed,
-			window:    window,
-			batchSize: batchSize,
+			speed:       speed,
+			window:      window,
+			batchSize:   batchSize,
+			saveAllowed: saveAllowed,
+			saveOutput:  saveAllowed && defaultSave,
 		},
 		streamer:   streamer,
 		sensorInfo: info,
@@ -79,7 +83,7 @@ func (m *Manager) StartPending(ctx context.Context) error {
 	if !hasRange {
 		return fmt.Errorf("pending range is not set")
 	}
-	if err := m.Start(ctx, rng.From, rng.To, rng.Step, rng.Speed, rng.Window); err != nil {
+	if err := m.Start(ctx, rng.From, rng.To, rng.Step, rng.Speed, rng.Window, rng.SaveOutput); err != nil {
 		return err
 	}
 	if seekSet {
@@ -96,9 +100,10 @@ func (m *Manager) StartPending(ctx context.Context) error {
 }
 
 // SetRange сохраняет диапазон/параметры без старта.
-func (m *Manager) SetRange(from, to time.Time, step time.Duration, speed float64, window time.Duration) {
+func (m *Manager) SetRange(from, to time.Time, step time.Duration, speed float64, window time.Duration, saveOutput bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	save := m.defaults.saveAllowed && saveOutput
 	m.pending.rangeSet = true
 	m.pending.rng = replay.Params{
 		Sensors:   append([]int64(nil), m.sensors...),
@@ -108,6 +113,7 @@ func (m *Manager) SetRange(from, to time.Time, step time.Duration, speed float64
 		Speed:     speed,
 		Window:    window,
 		BatchSize: m.defaults.batchSize,
+		SaveOutput: save,
 	}
 }
 
@@ -120,7 +126,7 @@ func (m *Manager) SetPendingSeek(ts time.Time) {
 }
 
 // Start запускает новую задачу. Разрешён только один одновременный запуск.
-func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duration, speed float64, window time.Duration) error {
+func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duration, speed float64, window time.Duration, saveOutput bool) error {
 	m.mu.Lock()
 	if m.job != nil && (m.job.status == "running" || m.job.status == "paused" || m.job.status == "stopping") {
 		m.mu.Unlock()
@@ -139,6 +145,7 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 			window = 5 * time.Minute
 		}
 	}
+	save := m.defaults.saveAllowed && saveOutput
 
 	ctrlCh := make(chan replay.Command, 16)
 	params := replay.Params{
@@ -149,6 +156,7 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 		Window:    window,
 		Speed:     speed,
 		BatchSize: m.defaults.batchSize,
+		SaveOutput: save,
 	}
 
 	if m.streamer != nil {
@@ -333,7 +341,7 @@ func (m *Manager) Status() Status {
 		if pending.RangeSet {
 			st = "pending"
 		}
-		return Status{Status: st, Pending: pending}
+		return Status{Status: st, Pending: pending, SaveAllowed: m.defaults.saveAllowed}
 	}
 	st := Status{
 		Status:      m.job.status,
@@ -344,6 +352,7 @@ func (m *Manager) Status() Status {
 		LastTS:      m.job.lastTs,
 		UpdatesSent: m.job.updatesSent,
 		Pending:     m.pendingStateLocked(),
+		SaveAllowed: m.defaults.saveAllowed,
 	}
 	if m.job.err != nil {
 		st.Error = m.job.err.Error()
@@ -450,6 +459,7 @@ type Status struct {
 	UpdatesSent int64         `json:"updates_sent"`
 	Error       string        `json:"error,omitempty"`
 	Pending     Pending       `json:"pending,omitempty"`
+	SaveAllowed bool          `json:"save_allowed"`
 }
 
 type StateMeta struct {

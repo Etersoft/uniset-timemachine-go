@@ -23,6 +23,7 @@ type HTTPClient struct {
 	Timeout        time.Duration
 	Retry          int
 	WorkerCount    int
+	BatchSize      int
 	QueueSize      int
 
 	mu            sync.Mutex
@@ -44,13 +45,17 @@ func (c *HTTPClient) Send(ctx context.Context, payload StepPayload) error {
 	if len(payload.Updates) == 0 {
 		return nil
 	}
-	if c.WorkerCount > 0 {
-		return c.enqueue(ctx, payload.Updates)
+	batch := c.BatchSize
+	if batch <= 0 {
+		batch = len(payload.Updates)
 	}
-	return c.set(ctx, payload.Updates)
+	if c.WorkerCount > 0 {
+		return c.enqueue(ctx, payload.Updates, batch)
+	}
+	return c.set(ctx, payload.Updates, batch)
 }
 
-func (c *HTTPClient) enqueue(ctx context.Context, updates []SensorUpdate) error {
+func (c *HTTPClient) enqueue(ctx context.Context, updates []SensorUpdate, batchSize int) error {
 	c.startWorkers.Do(func() {
 		size := c.QueueSize
 		if size <= 0 {
@@ -86,7 +91,7 @@ func (c *HTTPClient) enqueue(ctx context.Context, updates []SensorUpdate) error 
 
 func (c *HTTPClient) worker() {
 	for item := range c.queue {
-		err := c.set(item.ctx, item.updates)
+		err := c.set(item.ctx, item.updates, c.BatchSize)
 		select {
 		case item.resp <- err:
 		default:
@@ -94,7 +99,7 @@ func (c *HTTPClient) worker() {
 	}
 }
 
-func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate) error {
+func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate, batchSize int) error {
 	if c == nil {
 		return fmt.Errorf("http client: nil receiver")
 	}
@@ -110,11 +115,34 @@ func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate) error {
 	if err != nil {
 		return err
 	}
-	rawQuery, err := buildSetQuery(c.Supplier, updates, c.ParamFormatter)
-	if err != nil {
-		return err
+	if batchSize <= 0 {
+		batchSize = len(updates)
 	}
-	return c.sendWithRetry(ctx, httpClient, endpoint, rawQuery)
+	for i := 0; i < len(updates); i += batchSize {
+		chunk := updates[i:min(i+batchSize, len(updates))]
+		rawQuery, err := buildSetQuery(c.Supplier, chunk, c.ParamFormatter)
+		if err != nil {
+			return err
+		}
+		if err := c.sendWithRetry(ctx, httpClient, endpoint, rawQuery); err != nil {
+			if c.Logger != nil {
+				preview := rawQuery
+				if len(preview) > 100 {
+					preview = preview[:100] + "…"
+				}
+				c.Logger.Printf("SM send failed count=%d url=%s%s err=%v", len(chunk), endpoint, preview, err)
+			}
+			return err
+		}
+	}
+	return nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func buildSetQuery(supplier string, updates []SensorUpdate, formatter ParamFormatter) (string, error) {

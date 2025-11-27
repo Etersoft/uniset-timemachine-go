@@ -24,7 +24,7 @@ func newTestManager(t *testing.T) *Manager {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	return NewManager(svc, []int64{1, 2}, nil, 1000, step, 8, nil)
+	return NewManager(svc, []int64{1, 2}, nil, 1000, step, 8, nil, true, false)
 }
 
 func TestManagerStartConflictAndStop(t *testing.T) {
@@ -32,10 +32,10 @@ func TestManagerStartConflictAndStop(t *testing.T) {
 	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(3 * time.Second)
 
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err != nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
 		t.Fatalf("start returned error: %v", err)
 	}
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err == nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err == nil {
 		t.Fatalf("expected conflict on second start")
 	}
 	if status := mgr.Status().Status; status != "running" && status != "paused" {
@@ -51,7 +51,7 @@ func TestManagerPauseResume(t *testing.T) {
 	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(3 * time.Second)
 
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err != nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
 		t.Fatalf("start returned error: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestManagerPendingRangeAndSeek(t *testing.T) {
 	to := from.Add(5 * time.Second)
 	seekTs := from.Add(2 * time.Second)
 
-	mgr.SetRange(from, to, time.Second, 1, time.Second)
+	mgr.SetRange(from, to, time.Second, 1, time.Second, true)
 	mgr.SetPendingSeek(seekTs)
 	st := mgr.Status()
 	if st.Status != "pending" {
@@ -120,9 +120,9 @@ func TestManagerPlaybackFlowScenario(t *testing.T) {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	mgr := NewManager(svc, []int64{1}, nil, 2.0, step, 8, nil)
+	mgr := NewManager(svc, []int64{1}, nil, 2.0, step, 8, nil, true, false)
 
-	mgr.SetRange(from, to, step, 2.0, time.Second)
+	mgr.SetRange(from, to, step, 2.0, time.Second, true)
 	seekStart := from.Add(2 * step)
 	mgr.SetPendingSeek(seekStart)
 	if err := mgr.StartPending(context.Background()); err != nil {
@@ -193,7 +193,7 @@ func TestManagerPauseResumeAfterSteps(t *testing.T) {
 	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(4 * time.Second)
 
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err != nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
 		t.Fatalf("start returned error: %v", err)
 	}
 	waitManagerStatus(t, mgr, []string{"running"}, 2*time.Second)
@@ -221,9 +221,9 @@ func TestManagerSeekApplyPaused(t *testing.T) {
 	var capClient captureClient
 	client := &capClient
 	svc := replay.Service{Storage: store, Output: client}
-	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil)
+	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false)
 
-	if err := mgr.Start(context.Background(), from, to, step, 1, step); err != nil {
+	if err := mgr.Start(context.Background(), from, to, step, 1, step, true); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	waitManagerStatus(t, mgr, []string{"running"}, 2*time.Second)
@@ -251,9 +251,9 @@ func TestManagerStepBackwardApplyPaused(t *testing.T) {
 	var capClient captureClient
 	client := &capClient
 	svc := replay.Service{Storage: store, Output: client}
-	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil)
+	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false)
 
-	if err := mgr.Start(context.Background(), from, to, step, 1, step); err != nil {
+	if err := mgr.Start(context.Background(), from, to, step, 1, step, true); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	waitManagerStatus(t, mgr, []string{"running"}, 2*time.Second)
@@ -281,7 +281,7 @@ func TestManagerStopFromPausedAndRunning(t *testing.T) {
 	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := from.Add(3 * time.Second)
 
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err != nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	waitManagerStatus(t, mgr, []string{"running"}, 2*time.Second)
@@ -294,7 +294,7 @@ func TestManagerStopFromPausedAndRunning(t *testing.T) {
 	}
 	waitManagerStatus(t, mgr, []string{"done", "failed"}, 2*time.Second)
 
-	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second); err != nil {
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 	waitManagerStatus(t, mgr, []string{"running"}, 2*time.Second)

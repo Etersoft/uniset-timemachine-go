@@ -53,7 +53,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Manager) {
 		Storage: &apiTestStorage{},
 		Output:  &apiTestClient{},
 	}
-	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil)
+	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false)
 	srv := NewServer(mgr, nil)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

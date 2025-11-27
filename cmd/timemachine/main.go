@@ -46,6 +46,8 @@ type options struct {
 	sqliteWAL     bool
 	sqliteSyncOff bool
 	sqliteTempMem bool
+	saveOutput    bool
+	logFile       string
 	verbose       bool
 	logCache      bool
 	version       bool
@@ -61,6 +63,10 @@ func main() {
 	if opts.version {
 		fmt.Println("timemachine", version)
 		return
+	}
+
+	if err := configureLogging(opts.logFile); err != nil {
+		log.Fatalf("log file: %v", err)
 	}
 
 	if opts.generateCfg != "" {
@@ -114,6 +120,7 @@ func main() {
 		opts.dbURL, opts.config, len(sensors), opts.sensorSet, fromTs.Format(time.RFC3339), toTs.Format(time.RFC3339), opts.step, opts.window, opts.speed, opts.output)
 
 	client := initOutputClient(opts, cfg)
+	saveAllowed := opts.output == "http" && opts.smURL != "" && opts.smSupplier != ""
 	service := replay.Service{
 		Storage:  store,
 		Output:   client,
@@ -121,13 +128,14 @@ func main() {
 	}
 
 	params := replay.Params{
-		Sensors:   sensors,
-		From:      fromTs,
-		To:        toTs,
-		Step:      opts.step,
-		Window:    opts.window,
-		Speed:     opts.speed,
-		BatchSize: opts.batchSize,
+		Sensors:    sensors,
+		From:       fromTs,
+		To:         toTs,
+		Step:       opts.step,
+		Window:     opts.window,
+		Speed:      opts.speed,
+		BatchSize:  opts.batchSize,
+		SaveOutput: saveAllowed && opts.saveOutput,
 	}
 	if err := service.Run(ctx, params); err != nil {
 		log.Fatalf("replay failed: %v", err)
@@ -147,10 +155,9 @@ func parseFlags() options {
 	flag.DurationVar(&opt.step, "step", time.Second, "playback step (e.g. 1s, 500ms)")
 	flag.DurationVar(&opt.window, "window", 5*time.Minute, "preload window from DB")
 	flag.Float64Var(&opt.speed, "speed", 1.0, "playback speed multiplier")
-	flag.IntVar(&opt.batchSize, "batch-size", 1024, "max sensor updates per payload batch")
-	flag.StringVar(&opt.output, "output", "http", "output mode (http or stdout)")
-	flag.StringVar(&opt.smURL, "sm-url", "http://localhost:8998", "SharedMemory HTTP endpoint base URL")
-	flag.StringVar(&opt.smSupplier, "sm-supplier", "TimeMachine", "SharedMemory supplier name")
+	flag.IntVar(&opt.batchSize, "batch-size", 500, "max sensor updates per payload batch")
+	flag.StringVar(&opt.output, "output", "stdout", "output: stdout или http://localhost:9191/api/v01/SharedMemory (SharedMemory HTTP endpoint base URL)")
+	flag.StringVar(&opt.smSupplier, "sm-supplier", "TimeMachine", "SharedMemory supplier name (only for http output)")
 	flag.StringVar(&opt.smParamMode, "sm-param-mode", "id", "SharedMemory parameter mode (id or name)")
 	flag.StringVar(&opt.smParamPrefix, "sm-param-prefix", "id", "Prefix for sensor parameters (use empty to send raw IDs)")
 	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
@@ -160,6 +167,8 @@ func parseFlags() options {
 	flag.BoolVar(&opt.sqliteWAL, "sqlite-wal", true, "Enable SQLite WAL mode (PRAGMA journal_mode=WAL)")
 	flag.BoolVar(&opt.sqliteSyncOff, "sqlite-sync-off", true, "Set PRAGMA synchronous=OFF for SQLite")
 	flag.BoolVar(&opt.sqliteTempMem, "sqlite-temp-memory", true, "Set PRAGMA temp_store=MEMORY for SQLite")
+	flag.BoolVar(&opt.saveOutput, "save-output", false, "save updates to SharedMemory by default (only for --output=http with --sm-url)")
+	flag.StringVar(&opt.logFile, "log-file", "", "write logs to file instead of stderr")
 	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
 	flag.BoolVar(&opt.logCache, "log-cache", false, "log replay cache hits/misses")
 	flag.BoolVar(&opt.version, "version", false, "print version and exit")
@@ -326,28 +335,30 @@ func applyYAMLDefaults(path string) error {
 }
 
 func initOutputClient(opt options, cfg *config.Config) sharedmem.Client {
-	switch strings.ToLower(opt.output) {
-	case "stdout":
+	rawOut := opt.output
+	lowerOut := strings.ToLower(opt.output)
+	if lowerOut == "stdout" || rawOut == "" {
 		return &sharedmem.StdoutClient{Writer: os.Stdout}
-	case "http", "":
-		if opt.smURL == "" {
-			log.Fatalf("--sm-url is required for http output")
+	}
+	if strings.HasPrefix(lowerOut, "http://") || strings.HasPrefix(lowerOut, "https://") {
+		if opt.smSupplier == "" {
+			log.Fatalf("--sm-supplier is required when --output is http URL")
 		}
 		var logger *log.Logger
 		if opt.verbose {
-			logger = log.New(os.Stdout, "[sm] ", log.LstdFlags)
+			logger = log.New(log.Writer(), "[sm] ", log.Flags())
 		}
 		paramFormatter := makeParamFormatter(opt, cfg)
 		return &sharedmem.HTTPClient{
-			BaseURL:        opt.smURL,
+			BaseURL:        rawOut,
 			Supplier:       opt.smSupplier,
 			ParamFormatter: paramFormatter,
 			Logger:         logger,
+			BatchSize:      opt.batchSize,
 		}
-	default:
-		log.Fatalf("unsupported --output value: %s", opt.output)
-		return nil
 	}
+	log.Fatalf("unsupported --output value: %s", opt.output)
+	return nil
 }
 
 func makeParamFormatter(opt options, cfg *config.Config) sharedmem.ParamFormatter {
@@ -379,13 +390,14 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 	if opt.dbURL == "" {
 		log.Fatalf("serve mode requires --db storage")
 	}
+	saveAllowed := (strings.HasPrefix(strings.ToLower(opt.output), "http://") || strings.HasPrefix(strings.ToLower(opt.output), "https://") || opt.output == "") && opt.smSupplier != ""
 	service := replay.Service{
 		Storage:  store,
 		Output:   initOutputClient(opt, cfg),
 		LogCache: opt.logCache,
 	}
 	streamer := api.NewStateStreamer(opt.wsBatchTime)
-	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer)
+	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer, saveAllowed, opt.saveOutput)
 	server := api.NewServer(manager, streamer)
 	addr := opt.httpAddr
 	if addr == "" {
@@ -431,6 +443,18 @@ func flattenYAMLValue(prefix string, value interface{}, out map[string]interface
 	}
 }
 
+func configureLogging(path string) error {
+	if path == "" {
+		return nil
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	log.SetOutput(f)
+	return nil
+}
+
 func yamlKeyToFlag(key string) string {
 	key = strings.ToLower(key)
 	key = strings.ReplaceAll(key, "_", "-")
@@ -457,6 +481,7 @@ func yamlKeyToFlag(key string) string {
 		"output.sm-param-mode":        "sm-param-mode",
 		"output.sm-param-prefix":      "sm-param-prefix",
 		"output.batch-size":           "batch-size",
+		"output.save":                 "save-output",
 		"output.verbose":              "v",
 		"database.sqlite.cache-mb":    "sqlite-cache-mb",
 		"database.sqlite.wal":         "sqlite-wal",

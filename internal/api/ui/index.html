@@ -167,6 +167,13 @@
             Диапазон: <span id="rangeLabelValue" style="color:#fbbf24;">не задан</span>
           </button>
         </div>
+        <div style="flex:1; min-width: 160px;">
+          <label for="saveToSM">Сохранять в SM</label>
+          <label style="display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer; user-select:none;">
+            <input id="saveToSM" type="checkbox" style="width:18px; height:18px;">
+            <span style="color:#e5e7eb;">Включить</span>
+          </label>
+        </div>
         <div style="flex:1; min-width: 140px;">
           <label for="step">Шаг</label>
           <input id="step" type="text" value="1s">
@@ -400,6 +407,7 @@
         step: document.getElementById('step'),
         speed: document.getElementById('speed'),
         window: document.getElementById('window'),
+        saveToSM: document.getElementById('saveToSM'),
       },
       tabs: document.querySelectorAll('[data-tab]'),
       panels: {
@@ -492,7 +500,10 @@
       lastParamsSig: '',
       pausedAtTs: null,
       testRunning: false,
+      saveAllowed: false,
     };
+
+    syncSaveToggle();
 
     window.__setTestIndicator = (active, text = 'Идёт тестирование…') => {
       state.testRunning = !!active;
@@ -1741,6 +1752,34 @@
       return r2.valid ? r2 : { from: null, to: null, valid: false };
     }
 
+    function extractSaveOutput(params, pending) {
+      const pendingRange = pending?.range || pending?.Range;
+      if ((pending?.range_set || pending?.RangeSet) && pendingRange) {
+        const v = pendingRange.SaveOutput ?? pendingRange.save_output;
+        if (v !== undefined) return { value: !!v, known: true };
+      }
+      if (params) {
+        const v = params.SaveOutput ?? params.save_output;
+        if (v !== undefined) return { value: !!v, known: true };
+      }
+      return { value: false, known: false };
+    }
+
+    function syncSaveToggle() {
+      if (!els.inputs.saveToSM) return;
+      const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
+      state.saveAllowed = allowed;
+      const params = state.model.params || state.model.Params || {};
+      const pending = state.model.pending || state.model.Pending || {};
+      const saveInfo = extractSaveOutput(params, pending);
+      if (allowed && saveInfo.known) {
+        els.inputs.saveToSM.checked = !!saveInfo.value;
+      } else if (!allowed) {
+        els.inputs.saveToSM.checked = false;
+      }
+      setDisabled(els.inputs.saveToSM, !allowed);
+    }
+
     function syncChartRange(params, pending) {
       const range = getEffectiveRange(params, pending);
       if (!range.valid) {
@@ -1821,6 +1860,7 @@
       if (pendingSeek && (st === 'pending' || st === 'idle')) {
         els.status.ts.textContent = pendingSeek;
       }
+      syncSaveToggle();
       syncChartRange(params, pending);
       updateTimeline();
       updateControls();
@@ -1947,6 +1987,8 @@
       if (errors.length) return null;
       const payload = { from, to, step, speed };
       if (windowVal) payload.window = windowVal;
+      const saveOutput = state.saveAllowed && els.inputs.saveToSM && els.inputs.saveToSM.checked;
+      payload.save_output = !!saveOutput;
       return payload;
     }
 
@@ -1972,6 +2014,8 @@
         state.model.params = pendingRange;
         state.model.Params = pendingRange;
       }
+      state.saveAllowed = !!(data?.save_allowed ?? data?.SaveAllowed ?? state.saveAllowed);
+      syncSaveToggle();
       hydrateChartDefaultsFromParams();
       syncChartWithParams(state.model.params || state.model.Params);
       syncChartRange(state.model.params || state.model.Params, pending);
@@ -1990,7 +2034,7 @@
       await fetchSensorCount(payload.from, payload.to);
       logUI('startJob (v2) using pending');
       try {
-        await requestJSON('POST', '/api/v2/job/start', {});
+        await requestJSON('POST', '/api/v2/job/start', { save_output: payload.save_output });
         log('Старт отправлен');
         await refresh(true);
       } catch (err) {

@@ -12,7 +12,7 @@ go run ./cmd/timemachine \
   --confile config/test.xml \
   --slist "Sensor?????_S" \
   --output http \
-  --sm-url http://localhost:9191/api/v01/SharedMemory \
+  --output http://localhost:9191/api/v01/SharedMemory \
   --sm-supplier TestProc
 ```
 

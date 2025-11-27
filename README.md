@@ -18,7 +18,7 @@
 
 CLI принимает флаг `--confile` с путём к XML/JSON и `--slist` с именем набора (или `ALL`, или списком имён). Дополнительно поддерживаются glob-паттерны (`--slist "Sensor100*"` выберет все сенсоры из блока `Sensor100XX_S`). Для XML наборы не задаются и `--slist` должен перечислять имена вручную/по шаблону или использовать `ALL`. Выход по умолчанию — SharedMemory HTTP API (`--output http`) c параметрами:
 
-- `--sm-url` — базовый URL (по умолчанию `http://localhost:8998`).
+- `--output http://...` — базовый URL SharedMemory (по умолчанию `http://localhost:8998`). `stdout` — вывод в стандартный поток.
 - `--sm-supplier` — имя процесса (по умолчанию `TimeMachine`, используйте реальное имя при включённой проверке прав).
 - `--sm-param-mode` — формат параметров (`id` или `name`, по умолчанию `id`; режим `name` берёт имена из конфигурации).
 - `--sm-param-prefix` — префикс перед ID (по умолчанию `id`, установите пустую строку `--sm-param-prefix ""`, чтобы отправлять только числа).
@@ -31,7 +31,7 @@ CLI принимает флаг `--confile` с путём к XML/JSON и `--slis
 Запустите сервер управления с теми же параметрами БД/SM, что и CLI:
 
 ```bash
-go run ./cmd/timemachine --http-addr :8080 --db ... --confile config/test.xml --slist "Sensor?????_S" --output http --sm-url http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc
+go run ./cmd/timemachine --http-addr :8080 --db ... --confile config/test.xml --slist "Sensor?????_S" --output http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc
 ```
 
 Быстрый пример (демо ClickHouse + stdout + UI на 9090):
@@ -84,7 +84,7 @@ output:
   verbose: true
 ```
 
-Секции `database`, `sensors` и `output` автоматически маппятся на флаги (`database.dsn → --db`, `database.table → --ch-table`, `sensors.selector → --slist`, `output.sm_url → --sm-url`, `output.batch_size → --batch-size`, `output.verbose → -v`). Можно добавлять и плоские ключи (например, `batch-size: 256`). Запускайте `go run ./cmd/timemachine --config-yaml config/config.yaml ...` и переопределяйте только необходимые флаги в CLI.
+Секции `database`, `sensors` и `output` автоматически маппятся на флаги (`database.dsn → --db`, `database.table → --ch-table`, `sensors.selector → --slist`, `output → --output`, `output.batch_size → --batch-size`, `output.verbose → -v`). Можно добавлять и плоские ключи (например, `batch-size: 256`). Запускайте `go run ./cmd/timemachine --config-yaml config/config.yaml ...` и переопределяйте только необходимые флаги в CLI.
 
 Сгенерировать пример YAML со всеми основными полями можно командой:
 
@@ -135,7 +135,7 @@ go run ./cmd/gen-postgres-data --db postgres://admin:123@localhost:5432/uniset?s
   --confile config/test.xml --selector "Sensor?????_S" --sensors 50000 --points 300 --step 200ms --random 50
 go run ./cmd/timemachine --db postgres://admin:123@localhost:5432/uniset?sslmode=disable \
   --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:01:00Z \
-  --step 150ms --batch-size 500 --speed 400 --output http --sm-url http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc -v
+  --step 150ms --batch-size 500 --speed 400 --output http://localhost:9191/api/v01/SharedMemory --sm-supplier TestProc -v
 ```
 
 Для генерации крупных данных и прогона с реальной SM:
@@ -147,7 +147,7 @@ go run ./cmd/gen-clickhouse-data --db clickhouse://default:@localhost:9000/unise
   --sensors 50000 --points 300 --step 200ms --random 50 --nodename node1 --producer bench
 go run ./cmd/timemachine --db clickhouse://default:@localhost:9000/uniset --ch-table uniset.main_history \
   --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:01:00Z \
-  --step 150ms --batch-size 500 --speed 400 --output http --sm-url http://localhost:9191/api/v01/SharedMemory \
+  --step 150ms --batch-size 500 --speed 400 --output http://localhost:9191/api/v01/SharedMemory \
   --sm-supplier TestProc -v
 ```
 

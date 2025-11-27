@@ -153,8 +153,8 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		log.Printf("[http] job start from=%s to=%s step=%s speed=%f window=%s", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window)
-		if err := s.manager.Start(r.Context(), from, to, step, req.Speed, window); err != nil {
+		log.Printf("[http] job start from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
+		if err := s.manager.Start(r.Context(), from, to, step, req.Speed, window, req.SaveOutput); err != nil {
 			code := http.StatusBadRequest
 			if err.Error() == "job is already active" {
 				code = http.StatusConflict
@@ -230,8 +230,8 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 		if req.Speed <= 0 {
 			req.Speed = 1
 		}
-		log.Printf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window)
-		s.manager.SetRange(from, to, step, req.Speed, window)
+		log.Printf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
+		s.manager.SetRange(from, to, step, req.Speed, window, req.SaveOutput)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	case http.MethodGet:
 		min, max, count, err := s.manager.Range(r.Context())
@@ -505,11 +505,12 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 }
 
 type startRequest struct {
-	From   string  `json:"from"`
-	To     string  `json:"to"`
-	Step   string  `json:"step"`
-	Speed  float64 `json:"speed,omitempty"`
-	Window string  `json:"window,omitempty"`
+	From       string  `json:"from"`
+	To         string  `json:"to"`
+	Step       string  `json:"step"`
+	Speed      float64 `json:"speed,omitempty"`
+	Window     string  `json:"window,omitempty"`
+	SaveOutput bool    `json:"save_output,omitempty"`
 }
 
 type applyRequest struct {

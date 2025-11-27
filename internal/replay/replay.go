@@ -19,6 +19,7 @@ type Params struct {
 	Window    time.Duration
 	Speed     float64
 	BatchSize int
+	SaveOutput bool `json:"save_output,omitempty"`
 }
 
 // Service связывает storage и sharedmem.
@@ -116,21 +117,23 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 				batchSize = len(updates)
 			}
 			total := (len(updates) + batchSize - 1) / batchSize
-			for i := 0; i < total; i++ {
-				start := i * batchSize
-				end := start + batchSize
-				if end > len(updates) {
-					end = len(updates)
-				}
-				payload := sharedmem.StepPayload{
-					StepID:     stepID,
-					StepTs:     stepTs.Format(time.RFC3339),
-					BatchID:    i + 1,
-					BatchTotal: total,
-					Updates:    updates[start:end],
-				}
-				if err := s.Output.Send(ctx, payload); err != nil {
-					return err
+			if params.SaveOutput {
+				for i := 0; i < total; i++ {
+					start := i * batchSize
+					end := start + batchSize
+					if end > len(updates) {
+						end = len(updates)
+					}
+					payload := sharedmem.StepPayload{
+						StepID:     stepID,
+						StepTs:     stepTs.Format(time.RFC3339),
+						BatchID:    i + 1,
+						BatchTotal: total,
+						Updates:    updates[start:end],
+					}
+					if err := s.Output.Send(ctx, payload); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -779,21 +782,23 @@ func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[
 		batchSize = len(updates)
 	}
 	total := (len(updates) + batchSize - 1) / batchSize
-	for i := 0; i < total; i++ {
-		start := i * batchSize
-		end := start + batchSize
-		if end > len(updates) {
-			end = len(updates)
-		}
-		payload := sharedmem.StepPayload{
-			StepID:     *stepID,
-			StepTs:     stepTs.Format(time.RFC3339),
-			BatchID:    i + 1,
-			BatchTotal: total,
-			Updates:    updates[start:end],
-		}
-		if err := s.Output.Send(ctx, payload); err != nil {
-			return err
+	if params.SaveOutput {
+		for i := 0; i < total; i++ {
+			start := i * batchSize
+			end := start + batchSize
+			if end > len(updates) {
+				end = len(updates)
+			}
+			payload := sharedmem.StepPayload{
+				StepID:     *stepID,
+				StepTs:     stepTs.Format(time.RFC3339),
+				BatchID:    i + 1,
+				BatchTotal: total,
+				Updates:    updates[start:end],
+			}
+			if err := s.Output.Send(ctx, payload); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

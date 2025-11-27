@@ -34,7 +34,7 @@ func (f *fakeStorage) Stream(context.Context, storage.StreamRequest) (<-chan []s
 }
 
 func (f *fakeStorage) Range(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, error) {
-    return time.Time{}, time.Time{}, 0, nil
+	return time.Time{}, time.Time{}, 0, nil
 }
 
 type fakeClient struct {
@@ -69,13 +69,14 @@ func TestServiceRunBatchesUpdates(t *testing.T) {
 		Output:  client,
 	}
 	params := Params{
-		Sensors:   []int64{1, 2},
-		From:      start,
-		To:        start.Add(3 * time.Second),
-		Step:      time.Second,
-		Window:    time.Minute,
-		Speed:     10.0,
-		BatchSize: 1,
+		Sensors:    []int64{1, 2},
+		From:       start,
+		To:         start.Add(3 * time.Second),
+		Step:       time.Second,
+		Window:     time.Minute,
+		Speed:      10.0,
+		BatchSize:  1,
+		SaveOutput: true,
 	}
 	if err := svc.Run(context.Background(), params); err != nil {
 		t.Fatalf("Run returned error: %v", err)
@@ -182,13 +183,14 @@ func TestRunWithControlStepBackwardApply(t *testing.T) {
 
 	svc := Service{Storage: st, Output: client}
 	params := Params{
-		Sensors:   []int64{1},
-		From:      from,
-		To:        from.Add(2 * time.Second),
-		Step:      time.Second,
-		Window:    time.Second,
-		Speed:     1000,
-		BatchSize: 10,
+		Sensors:    []int64{1},
+		From:       from,
+		To:         from.Add(2 * time.Second),
+		Step:       time.Second,
+		Window:     time.Second,
+		Speed:      1000,
+		BatchSize:  10,
+		SaveOutput: true,
 	}
 
 	go func() {
@@ -271,13 +273,14 @@ func TestRunWithControlSeekApply(t *testing.T) {
 
 	svc := Service{Storage: st, Output: client}
 	params := Params{
-		Sensors:   []int64{1},
-		From:      from,
-		To:        from.Add(3 * time.Second),
-		Step:      time.Second,
-		Window:    time.Second,
-		Speed:     1000,
-		BatchSize: 10,
+		Sensors:    []int64{1},
+		From:       from,
+		To:         from.Add(3 * time.Second),
+		Step:       time.Second,
+		Window:     time.Second,
+		Speed:      1000,
+		BatchSize:  10,
+		SaveOutput: true,
 	}
 
 	go func() {

@@ -153,6 +153,7 @@
           <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд" title="Шаг вперёд" style="width:60px;">⏭</button>
         </div>
         <div class="chips" style="justify-content:flex-end; display:flex; gap:10px; flex-wrap:wrap;">
+          <span class="chip" id="wsSpeedChip">ws —</span>
           <span class="chip ok" id="pollingChip">polling 1.5s</span>
           <span class="chip">REST /api/v2/*</span>
         </div>
@@ -417,6 +418,7 @@
       },
       startErrors: document.getElementById('startErrors'),
       chipStatus: document.getElementById('chipStatus'),
+      wsSpeed: document.getElementById('wsSpeedChip'),
       status: {
         badge: document.getElementById('statusBadge'),
         error: document.getElementById('errorNote'),
@@ -501,9 +503,13 @@
       pausedAtTs: null,
       testRunning: false,
       saveAllowed: false,
+      wsBytes: [],
+      saveDirty: false,
     };
 
     syncSaveToggle();
+
+    setInterval(updateWsChip, 1000);
 
     window.__setTestIndicator = (active, text = 'Идёт тестирование…') => {
       state.testRunning = !!active;
@@ -604,7 +610,7 @@
     return num.toFixed(tableValuePrecision);
   }
 
-  function log(message, state = true) {
+    function log(message, state = true) {
       const level = typeof state === 'string' ? state : (state ? 'ok' : 'err');
       const row = document.createElement('div');
       row.className = `log-entry ${level}`;
@@ -613,6 +619,38 @@
       while (els.log.children.length > 200) {
         els.log.removeChild(els.log.lastChild);
       }
+    }
+
+    function trackWsBytes(n) {
+      const now = Date.now();
+      state.wsBytes.push({ t: now, n });
+      // Оставляем последние 5 секунд.
+      const cutoff = now - 5000;
+      while (state.wsBytes.length && state.wsBytes[0].t < cutoff) {
+        state.wsBytes.shift();
+      }
+    }
+
+    function formatSpeed(bytesPerSec) {
+      if (!Number.isFinite(bytesPerSec) || bytesPerSec <= 0) return '—';
+      const kb = 1024;
+      const mb = kb * 1024;
+      if (bytesPerSec >= mb) return `${(bytesPerSec / mb).toFixed(1)} MB/s`;
+      if (bytesPerSec >= kb) return `${(bytesPerSec / kb).toFixed(1)} kB/s`;
+      return `${bytesPerSec.toFixed(0)} B/s`;
+    }
+
+    function updateWsChip() {
+      if (!els.wsSpeed) return;
+      const now = Date.now();
+      const cutoff = now - 5000;
+      state.wsBytes = state.wsBytes.filter(item => item.t >= cutoff);
+      const total = state.wsBytes.reduce((acc, item) => acc + item.n, 0);
+      const windowSec = 5;
+      const speed = total / windowSec;
+      els.wsSpeed.textContent = `ws ${formatSpeed(speed)}`;
+      els.wsSpeed.classList.toggle('ok', !!state.ws);
+      els.wsSpeed.classList.toggle('warn', !state.ws);
     }
 
     function setTab(tab) {
@@ -634,14 +672,28 @@
       try {
         const ws = new WebSocket(url);
         state.ws = ws;
-        ws.onopen = () => log('WS: connected');
+        ws.onopen = () => {
+          state.wsBytes = [];
+          updateWsChip();
+          log('WS: connected');
+        };
         ws.onclose = () => {
           state.ws = null;
+          state.wsBytes = [];
+          updateWsChip();
           if (state.reconnectIn) clearTimeout(state.reconnectIn);
           state.reconnectIn = setTimeout(connectWS, 2000);
         };
         ws.onerror = () => ws.close();
         ws.onmessage = (ev) => {
+          if (typeof ev.data === 'string') {
+            trackWsBytes(ev.data.length);
+          } else if (ev.data && typeof ev.data.size === 'number') {
+            // Blob-like
+            trackWsBytes(ev.data.size);
+          } else if (ev.data && ev.data.byteLength) {
+            trackWsBytes(ev.data.byteLength);
+          }
           try {
             const msg = JSON.parse(ev.data);
             handleWSMessage(msg);
@@ -1765,19 +1817,25 @@
       return { value: false, known: false };
     }
 
-    function syncSaveToggle() {
+    function syncSaveToggle(status) {
       if (!els.inputs.saveToSM) return;
       const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
       state.saveAllowed = allowed;
       const params = state.model.params || state.model.Params || {};
       const pending = state.model.pending || state.model.Pending || {};
       const saveInfo = extractSaveOutput(params, pending);
-      if (allowed && saveInfo.known) {
-        els.inputs.saveToSM.checked = !!saveInfo.value;
+      const st = status || state.model.status || '';
+      const runningLike = st === 'running' || st === 'stopping';
+      if (allowed && !runningLike) {
+        if (!state.saveDirty && saveInfo.known) {
+          els.inputs.saveToSM.checked = !!saveInfo.value;
+        }
       } else if (!allowed) {
         els.inputs.saveToSM.checked = false;
+      } else if (runningLike && saveInfo.known && !state.saveDirty) {
+        els.inputs.saveToSM.checked = !!saveInfo.value;
       }
-      setDisabled(els.inputs.saveToSM, !allowed);
+      setDisabled(els.inputs.saveToSM, !allowed || runningLike);
     }
 
     function syncChartRange(params, pending) {
@@ -1860,7 +1918,7 @@
       if (pendingSeek && (st === 'pending' || st === 'idle')) {
         els.status.ts.textContent = pendingSeek;
       }
-      syncSaveToggle();
+      syncSaveToggle(st);
       syncChartRange(params, pending);
       updateTimeline();
       updateControls();
@@ -1928,6 +1986,7 @@
       const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
       const atEnd = !range.valid || !curTs || curTs.getTime() >= range.to.getTime();
       const canStep = range.valid && st !== 'failed' && st !== 'running' && st !== 'stopping';
+      const runningLike = st === 'running' || st === 'stopping';
 
       setDisabled(els.controls.stepBack, !canStep || atStart);
       setDisabled(els.controls.stepFwd, !canStep || atEnd);
@@ -1947,6 +2006,10 @@
       }
       if (els.controls.jumpEnd) {
         setDisabled(els.controls.jumpEnd, !range.valid || st === 'running' || st === 'stopping');
+      }
+      if (els.inputs.saveToSM) {
+        const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
+        setDisabled(els.inputs.saveToSM, runningLike || !allowed);
       }
     }
 
@@ -2046,6 +2109,11 @@
       els.tabs.forEach(btn => {
         btn.addEventListener('click', () => setTab(btn.dataset.tab));
       });
+      if (els.inputs.saveToSM) {
+        els.inputs.saveToSM.addEventListener('change', () => {
+          state.saveDirty = true;
+        });
+      }
       if (els.table.filter) {
         els.table.filter.addEventListener('input', (e) => {
           const v = e.target.value.toLowerCase();
@@ -2334,7 +2402,9 @@
           await action('seek', '/api/v2/job/seek', { ts: target, apply: false });
         }
         state.previewTs = null;
-        await action('resume', '/api/v2/job/resume');
+        const saveOutput = state.saveAllowed && els.inputs.saveToSM && els.inputs.saveToSM.checked;
+        state.saveDirty = false;
+        await action('resume', '/api/v2/job/resume', { save_output: saveOutput });
         return;
       }
       logUI('Play button: starting job');

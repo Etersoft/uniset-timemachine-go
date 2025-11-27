@@ -55,7 +55,7 @@ type options struct {
 	generateCfg   string
 }
 
-const version = "0.1.0-dev"
+const version = "2.0.1-dev"
 
 func main() {
 	opts := parseFlags()

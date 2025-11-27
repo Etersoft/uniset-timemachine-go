@@ -247,6 +247,18 @@ func (m *Manager) Resume() error {
 	return nil
 }
 
+// SetSaveOutput обновляет флаг сохранения в SM для текущей задачи.
+func (m *Manager) SetSaveOutput(save bool) error {
+	m.mu.Lock()
+	if m.job == nil || m.job.commands == nil {
+		m.mu.Unlock()
+		return fmt.Errorf("no active job")
+	}
+	m.job.params.SaveOutput = save
+	m.mu.Unlock()
+	return m.sendCommand(replay.Command{Type: replay.CommandSaveOutput, SaveOutput: save})
+}
+
 // Stop останавливает задачу.
 func (m *Manager) Stop() error {
 	m.mu.Lock()

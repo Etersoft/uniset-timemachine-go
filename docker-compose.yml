@@ -38,6 +38,21 @@ services:
       timeout: 3s
       retries: 5
 
+  playwright:
+    image: mcr.microsoft.com/playwright:v1.39.0-jammy
+    container_name: tm-playwright
+    profiles: ["tests"]
+    working_dir: /workspace
+    shm_size: 1g
+    volumes:
+      - ./:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    entrypoint: ["bash", "-lc", "npm ci && npx playwright test"]
+
 volumes:
   pgdata: {}
   chdata: {}

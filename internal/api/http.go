@@ -100,7 +100,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		{"/api/v2/job/seek", http.HandlerFunc(s.handleSetSeek)},
 		{"/api/v2/job/start", http.HandlerFunc(s.handleStartPending)},
 		{"/api/v2/job/pause", http.HandlerFunc(s.wrapSimpleWithLog("pause", s.manager.Pause))},
-		{"/api/v2/job/resume", http.HandlerFunc(s.wrapSimpleWithLog("resume", s.manager.Resume))},
+		{"/api/v2/job/resume", http.HandlerFunc(s.handleResume)},
 		{"/api/v2/job/stop", http.HandlerFunc(s.wrapSimpleWithLog("stop", s.manager.Stop))},
 		{"/api/v2/job/apply", http.HandlerFunc(s.wrapSimpleWithLog("apply", s.manager.Apply))},
 		{"/api/v2/job/step/forward", http.HandlerFunc(s.wrapSimpleWithLog("step_forward", s.manager.StepForward))},
@@ -288,6 +288,28 @@ func (s *Server) handleSetSeek(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "paused"})
+}
+
+// handleResume возобновляет задачу, опционально меняя флаг сохранения в SM.
+func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req resumeRequest
+	_ = decodeJSON(r, &req) // тело может быть пустым
+	log.Printf("[http] command resume save_output=%v", req.SaveOutput)
+	if req.SaveOutput != nil {
+		if err := s.manager.SetSaveOutput(*req.SaveOutput); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if err := s.manager.Resume(); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleStartPending запускает задачу из отложенного диапазона.
@@ -515,6 +537,10 @@ type startRequest struct {
 
 type applyRequest struct {
 	Apply bool `json:"apply"`
+}
+
+type resumeRequest struct {
+	SaveOutput *bool `json:"save_output,omitempty"`
 }
 
 type seekRequest struct {

@@ -82,3 +82,7 @@ RUN_FLAGS ?= --http-addr :9090 --db sqlite://test.db --confile config/test.xml -
 run:
 	@echo "Running timemachine with $(RUN_FLAGS)"
 	@go run ./cmd/timemachine $(RUN_FLAGS)
+
+js-tests:
+	@echo "Running Playwright tests via docker-compose..."
+	@docker compose --profile tests run --rm playwright

@@ -17,14 +17,16 @@ const (
 	CommandStepBackward
 	CommandSeek
 	CommandApply
+	CommandSaveOutput
 )
 
 // Command передаёт управляющее сообщение в RunWithControl.
 type Command struct {
-	Type  CommandType
-	TS    time.Time
-	Apply bool
-	Resp  chan<- error
+	Type       CommandType
+	TS         time.Time
+	Apply      bool
+	SaveOutput bool
+	Resp       chan<- error
 }
 
 // Control объединяет каналы управления и коллбеки прогресса.

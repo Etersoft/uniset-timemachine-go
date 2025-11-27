@@ -193,8 +193,11 @@ func TestRunWithControlStepBackwardApply(t *testing.T) {
 		SaveOutput: true,
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
 	go func() {
-		_ = svc.RunWithControl(context.Background(), params, Control{
+		done <- svc.RunWithControl(ctx, params, Control{
 			Commands: cmdCh,
 			OnStep: func(info StepInfo) {
 				stepCh <- info
@@ -272,6 +275,9 @@ func TestRunWithControlSeekApply(t *testing.T) {
 	cmdCh := make(chan Command, 2)
 
 	svc := Service{Storage: st, Output: client}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
 	params := Params{
 		Sensors:    []int64{1},
 		From:       from,
@@ -284,7 +290,7 @@ func TestRunWithControlSeekApply(t *testing.T) {
 	}
 
 	go func() {
-		_ = svc.RunWithControl(context.Background(), params, Control{
+		done <- svc.RunWithControl(ctx, params, Control{
 			Commands: cmdCh,
 		})
 	}()
@@ -300,15 +306,11 @@ func TestRunWithControlSeekApply(t *testing.T) {
 		t.Fatalf("seek command timeout")
 	}
 
-	stopResp := make(chan error, 1)
-	cmdCh <- Command{Type: CommandStop, Resp: stopResp}
+	cancel()
 	select {
-	case err := <-stopResp:
-		if err != nil && err.Error() != (ErrStopped{}).Error() {
-			t.Fatalf("stop returned error: %v", err)
-		}
+	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatalf("stop command timeout")
+		t.Fatalf("run did not finish after cancel")
 	}
 
 	if len(client.payloads) == 0 {
@@ -320,6 +322,138 @@ func TestRunWithControlSeekApply(t *testing.T) {
 	}
 	if len(snap.Updates) != 1 || snap.Updates[0].Value != 1 {
 		t.Fatalf("snapshot updates mismatch: %+v", snap.Updates)
+	}
+}
+
+func TestRunWithControlSaveOutputToggle(t *testing.T) {
+	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	st := &controlStorage{
+		warmup: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start.Add(-time.Second), Value: 9},
+		},
+		events: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start, Value: 10},
+			{SensorID: 1, Timestamp: start.Add(time.Second), Value: 20},
+		},
+	}
+	client := &fakeClient{}
+	cmdCh := make(chan Command, 4)
+	stepCh := make(chan StepInfo, 4)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+
+	svc := Service{Storage: st, Output: client}
+	params := Params{
+		Sensors:    []int64{1},
+		From:       start,
+		To:         start.Add(2 * time.Second),
+		Step:       time.Second,
+		Window:     time.Second,
+		Speed:      1000,
+		BatchSize:  10,
+		SaveOutput: true,
+	}
+
+	go func() {
+		done <- svc.RunWithControl(ctx, params, Control{
+			Commands: cmdCh,
+			OnStep: func(info StepInfo) {
+				stepCh <- info
+			},
+		})
+	}()
+
+	waitStep := func(expected int64) {
+		t.Helper()
+		select {
+		case info := <-stepCh:
+			if info.StepID != expected {
+				t.Fatalf("unexpected step id: %d, want %d", info.StepID, expected)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timeout waiting for step %d", expected)
+		}
+	}
+
+	waitStep(1)
+	// После первого шага делаем паузу и выключаем сохранение.
+	cmdCh <- Command{Type: CommandPause}
+	cmdCh <- Command{Type: CommandSaveOutput, SaveOutput: false}
+	cmdCh <- Command{Type: CommandResume}
+
+	waitStep(2)
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("run did not finish after cancel")
+	}
+
+	// Сохранение было только до переключения.
+	if len(client.payloads) != 1 {
+		t.Fatalf("expected only first step to be saved, got %d payloads", len(client.payloads))
+	}
+	if len(client.payloads[0].Updates) == 0 {
+		t.Fatalf("saved payload has no updates")
+	}
+}
+
+func TestRunWithControlApplyRespectsSaveOutput(t *testing.T) {
+	start := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	st := &controlStorage{
+		warmup: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start.Add(-time.Second), Value: 5},
+		},
+		events: []storage.SensorEvent{
+			{SensorID: 1, Timestamp: start, Value: 10},
+		},
+	}
+	client := &fakeClient{}
+	cmdCh := make(chan Command, 2)
+
+	svc := Service{Storage: st, Output: client}
+	params := Params{
+		Sensors:    []int64{1},
+		From:       start,
+		To:         start.Add(time.Second),
+		Step:       time.Second,
+		Window:     time.Second,
+		Speed:      1000,
+		BatchSize:  10,
+		SaveOutput: false,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- svc.RunWithControl(ctx, params, Control{
+			Commands: cmdCh,
+		})
+	}()
+
+	resp := make(chan error, 1)
+	cmdCh <- Command{Type: CommandApply, Resp: resp}
+	select {
+	case err := <-resp:
+		if err != nil {
+			t.Fatalf("apply returned error: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("apply command timeout")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("run did not finish after cancel")
+	}
+
+	if len(client.payloads) != 0 {
+		t.Fatalf("apply should not send payload when save_output=false, got %d", len(client.payloads))
 	}
 }
 

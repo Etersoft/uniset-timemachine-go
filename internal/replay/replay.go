@@ -50,6 +50,7 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 		return fmt.Errorf("replay: invalid period: %s → %s", params.From, params.To)
 	}
 
+	saveOutput := params.SaveOutput
 	state := make(map[int64]*sensorState, len(params.Sensors))
 	for _, id := range params.Sensors {
 		state[id] = &sensorState{}
@@ -93,14 +94,14 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 		}
 
 		if ctrl != nil {
-			if err := handleCommands(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
+			if err := handleCommands(ctx, s, params, ctrl, &saveOutput, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
 				return err
 			}
 		}
 
 		if paused {
 			if ctrl != nil {
-				if err := waitWhilePaused(ctx, s, params, ctrl, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
+				if err := waitWhilePaused(ctx, s, params, ctrl, &saveOutput, &state, &stepTs, &stepID, &streamCancel, &eventCh, &streamErr, &pending, &paused, &stepOnce, cache); err != nil {
 					return err
 				}
 			}
@@ -117,7 +118,7 @@ func (s *Service) run(ctx context.Context, params Params, ctrl *Control) error {
 				batchSize = len(updates)
 			}
 			total := (len(updates) + batchSize - 1) / batchSize
-			if params.SaveOutput {
+			if saveOutput {
 				for i := 0; i < total; i++ {
 					start := i * batchSize
 					end := start + batchSize
@@ -377,6 +378,7 @@ func handleCommands(
 	s *Service,
 	params Params,
 	ctrl *Control,
+	saveOutput *bool,
 	state *map[int64]*sensorState,
 	stepTs *time.Time,
 	stepID *int64,
@@ -419,7 +421,7 @@ func handleCommands(
 				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
-					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput); err != nil {
 						respErr = err
 					}
 				}
@@ -439,12 +441,14 @@ func handleCommands(
 				notifyOnStep(ctrl, *stepID, *stepTs, 0)
 				*paused = true
 				if cmd.Apply {
-					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+					if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput); err != nil {
 						respErr = err
 					}
 				}
+			case CommandSaveOutput:
+				*saveOutput = cmd.SaveOutput
 			case CommandApply:
-				respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs)
+				respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput)
 			default:
 			}
 			if cmd.Resp != nil {
@@ -467,6 +471,7 @@ func waitWhilePaused(
 	s *Service,
 	params Params,
 	ctrl *Control,
+	saveOutput *bool,
 	state *map[int64]*sensorState,
 	stepTs *time.Time,
 	stepID *int64,
@@ -507,7 +512,7 @@ func waitWhilePaused(
 			notifyOnStep(ctrl, *stepID, *stepTs, 0)
 			*paused = true
 			if cmd.Apply {
-				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput); err != nil {
 					respErr = err
 				}
 			}
@@ -529,12 +534,14 @@ func waitWhilePaused(
 			notifyOnStep(ctrl, *stepID, *stepTs, 0)
 			*paused = true
 			if cmd.Apply {
-				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs); err != nil {
+				if err := sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput); err != nil {
 					respErr = err
 				}
 			}
+		case CommandSaveOutput:
+			*saveOutput = cmd.SaveOutput
 		case CommandApply:
-			respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs)
+			respErr = sendFullSnapshot(ctx, s, params, *state, stepID, stepTs, *saveOutput)
 		}
 		if cmd.Resp != nil {
 			select {
@@ -766,7 +773,7 @@ func restoreState(
 	}
 	return nil
 }
-func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[int64]*sensorState, stepID *int64, stepTs *time.Time) error {
+func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[int64]*sensorState, stepID *int64, stepTs *time.Time, saveOutput bool) error {
 	updates := make([]sharedmem.SensorUpdate, 0, len(state))
 	for id, st := range state {
 		if st.hasValue {
@@ -782,7 +789,7 @@ func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[
 		batchSize = len(updates)
 	}
 	total := (len(updates) + batchSize - 1) / batchSize
-	if params.SaveOutput {
+	if saveOutput {
 		for i := 0; i < total; i++ {
 			start := i * batchSize
 			end := start + batchSize

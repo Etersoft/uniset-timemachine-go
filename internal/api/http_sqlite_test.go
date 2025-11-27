@@ -57,7 +57,8 @@ func TestHTTPAPIWithSQLiteAutoSeed(t *testing.T) {
 		"speed":  50.0,
 		"window": "2s",
 	}
-	if resp := postJSON(t, ts.URL+"/api/v1/job", body); resp.StatusCode != http.StatusOK {
+	postJSON(t, ts.URL+"/api/v2/job/range", body)
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("start job status = %d, want 200", resp.StatusCode)
 	}
 
@@ -145,7 +146,7 @@ func waitForJobFinish(t *testing.T, baseURL string, timeout time.Duration) Statu
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(baseURL + "/api/v1/job")
+		resp, err := http.Get(baseURL + "/api/v2/job")
 		if err != nil {
 			t.Fatalf("get job status: %v", err)
 		}

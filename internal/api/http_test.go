@@ -80,10 +80,13 @@ func TestJobStartConflict(t *testing.T) {
 		"speed":  1.0,
 		"window": "1s",
 	}
-	if resp := postJSON(t, ts.URL+"/api/v1/job", body); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/range", body); resp.StatusCode != http.StatusOK {
 		t.Fatalf("start job status = %d, want 200", resp.StatusCode)
 	}
-	if resp := postJSON(t, ts.URL+"/api/v1/job", body); resp.StatusCode != http.StatusConflict {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("start job status = %d, want 200", resp.StatusCode)
+	}
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusConflict {
 		t.Fatalf("second start status = %d, want 409", resp.StatusCode)
 	}
 	mgr.Stop()
@@ -101,16 +104,17 @@ func TestPauseResumeAndState(t *testing.T) {
 		"step":  "1s",
 		"speed": 1.0,
 	}
-	postJSON(t, ts.URL+"/api/v1/job", body)
+	postJSON(t, ts.URL+"/api/v2/job/range", body)
+	postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{})
 
-	if resp := postJSON(t, ts.URL+"/api/v1/job/pause", nil); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/pause", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("pause status = %d, want 200", resp.StatusCode)
 	}
-	if resp := postJSON(t, ts.URL+"/api/v1/job/resume", nil); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/resume", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("resume status = %d, want 200", resp.StatusCode)
 	}
 
-	resp, err := http.Get(ts.URL + "/api/v1/job/state")
+	resp, err := http.Get(ts.URL + "/api/v2/job")
 	if err != nil {
 		t.Fatalf("get state: %v", err)
 	}
@@ -118,7 +122,7 @@ func TestPauseResumeAndState(t *testing.T) {
 		t.Fatalf("state status = %d, want 200", resp.StatusCode)
 	}
 
-	postJSON(t, ts.URL+"/api/v1/job/stop", nil)
+	postJSON(t, ts.URL+"/api/v2/job/stop", nil)
 }
 
 func TestStepBackwardSeekApplySnapshot(t *testing.T) {
@@ -127,31 +131,32 @@ func TestStepBackwardSeekApplySnapshot(t *testing.T) {
 
 	from := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
 	to := from.Add(6 * time.Second)
-	postJSON(t, ts.URL+"/api/v1/job", map[string]any{
+	postJSON(t, ts.URL+"/api/v2/job/range", map[string]any{
 		"from":  from.Format(time.RFC3339),
 		"to":    to.Format(time.RFC3339),
 		"step":  "1s",
 		"speed": 1.0,
 	})
+	postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{})
 
-	if resp := postJSON(t, ts.URL+"/api/v1/job/step/backward", map[string]any{"apply": true}); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/step/backward", map[string]any{"apply": true}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("step backward status = %d, want 200", resp.StatusCode)
 	}
 
 	seekTs := from.Add(2 * time.Second)
-	if resp := postJSON(t, ts.URL+"/api/v1/job/seek", map[string]any{"ts": seekTs.Format(time.RFC3339), "apply": true}); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/seek", map[string]any{"ts": seekTs.Format(time.RFC3339), "apply": true}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("seek status = %d, want 200", resp.StatusCode)
 	}
 
-	if resp := postJSON(t, ts.URL+"/api/v1/job/apply", nil); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/job/apply", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("apply status = %d, want 200", resp.StatusCode)
 	}
 
-	if resp := postJSON(t, ts.URL+"/api/v1/snapshot", map[string]any{"ts": seekTs.Format(time.RFC3339)}); resp.StatusCode != http.StatusOK {
+	if resp := postJSON(t, ts.URL+"/api/v2/snapshot", map[string]any{"ts": seekTs.Format(time.RFC3339)}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("snapshot status = %d, want 200", resp.StatusCode)
 	}
 
-	postJSON(t, ts.URL+"/api/v1/job/stop", nil)
+	postJSON(t, ts.URL+"/api/v2/job/stop", nil)
 }
 
 func TestUIIndexServed(t *testing.T) {
@@ -197,7 +202,6 @@ func TestRangeEndpoint(t *testing.T) {
 		}
 	}
 
-	check("/api/v1/range")
 	check("/api/v2/job/range")
 }
 

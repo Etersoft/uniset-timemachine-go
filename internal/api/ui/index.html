@@ -668,7 +668,7 @@
     function connectWS() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const host = location.host || 'localhost:8080';
-      const url = `${proto}://${host}/api/v1/ws/state`;
+      const url = `${proto}://${host}/api/v2/ws/state`;
       try {
         const ws = new WebSocket(url);
         state.ws = ws;
@@ -1755,7 +1755,7 @@
         const tsDate = currentTsFromServer();
         const ts = tsDate ? toRFC3339(tsDate) : '';
         if (!ts) return;
-        const data = await requestJSON('POST', '/api/v1/snapshot', { ts });
+        const data = await requestJSON('POST', '/api/v2/snapshot', { ts });
         const updates = data?.updates || data?.Updates || [];
         const stepTs = data?.step_ts || data?.StepTS || '';
         applySnapshot(updates, stepTs);

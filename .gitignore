@@ -1,7 +1,10 @@
 .gocache/
 .gomodcache/
 node_modules/
+.node_modules/
 cpu.pprof
+test-results/
+codex-session.sh
 .env
 sqlite-large.db
 config/generated-sensors.xml

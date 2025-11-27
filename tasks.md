@@ -7,7 +7,7 @@
    - Реализованы set_range/set_seek/start/pause/resume/stop/step_forward/backward/apply, отдельные тела запросов и конфликты старта.
 
 3. ✅ **Ответы сервера**  
-   - `/api/v2/job` и `/api/v1/job` возвращают params + pending (range/seek), step_id/last_ts/updates_sent.
+  - `/api/v2/job` возвращает params + pending (range/seek), step_id/last_ts/updates_sent.
 
 4. ✅ **Клиент (UI)**  
    - UI работает от серверного состояния, управляет pending range/seek и командами, без локальных пересчётов last_ts.

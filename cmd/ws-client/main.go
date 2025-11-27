@@ -39,7 +39,7 @@ func main() {
 		limit  int
 		urlStr string
 	)
-	flag.StringVar(&urlStr, "url", "ws://127.0.0.1:19001/api/v1/ws/state", "WebSocket URL of timemachine server")
+	flag.StringVar(&urlStr, "url", "ws://127.0.0.1:19001/api/v2/ws/state", "WebSocket URL of timemachine server")
 	flag.BoolVar(&raw, "raw", false, "print raw JSON messages")
 	flag.IntVar(&limit, "limit", 0, "stop after N update messages (0 = infinite)")
 	flag.Parse()

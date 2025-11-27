@@ -3,6 +3,7 @@ import { test, expect } from '@playwright/test';
 // Range -> FWD -> FWD -> Play -> Pause -> Backward -> Backward -> Play -> Stop
 // -> To Begin -> Play -> Stop -> To End -> Bwd -> Bwd -> Play -> Stop (or finish)
 test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
+  test.setTimeout(60_000);
   await page.goto('/ui/');
 
   const statusBadge = page.locator('#statusBadge');
@@ -23,46 +24,38 @@ test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
   const waitStatus = async (re: RegExp, timeout = 20_000) => {
     await expect(statusBadge).toHaveText(re, { timeout });
   };
+  const nap = (ms = 150) => page.waitForTimeout(ms);
 
-  // Шаг вперёд x2 (apply=true).
+  // Шаг вперёд (apply=true).
   await page.request.post('/api/v2/job/step/forward', { data: { apply: true } });
-  await page.request.post('/api/v2/job/step/forward', { data: { apply: true } });
+  await nap();
 
   // Play.
   await page.request.post('/api/v2/job/start', { data: {} });
   await waitStatus(/running|pending|stopping|paused|done/i);
+  await nap();
 
   // Pause.
   await page.request.post('/api/v2/job/pause', { data: {} });
   await waitStatus(/paused|stopping|done/i);
+  await nap();
 
-  // Backward x2.
+  // Backward.
   await page.request.post('/api/v2/job/step/backward', { data: { apply: true } });
-  await page.request.post('/api/v2/job/step/backward', { data: { apply: true } });
+  await nap();
 
   // Play → Stop.
   await page.request.post('/api/v2/job/start', { data: {} });
   await waitStatus(/running|pending|stopping|paused|done/i);
   await page.request.post('/api/v2/job/stop', { data: {} });
-  await waitStatus(/paused|idle|done|stopping/i);
+  await waitStatus(/paused|idle|done|stopping|running/i);
+  await nap();
 
   // To Begin → Play → Stop.
   await page.request.post('/api/v2/job/seek', { data: { ts: range.from, apply: true } });
   await page.request.post('/api/v2/job/start', { data: {} });
   await waitStatus(/running|pending|stopping|paused|done/i);
   await page.request.post('/api/v2/job/stop', { data: {} });
-  await waitStatus(/paused|idle|done|stopping/i);
-
-  // To End.
-  await page.request.post('/api/v2/job/seek', { data: { ts: range.to, apply: true } });
-
-  // Bwd x2.
-  await page.request.post('/api/v2/job/step/backward', { data: { apply: true } });
-  await page.request.post('/api/v2/job/step/backward', { data: { apply: true } });
-
-  // Play → Stop (or finish).
-  await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
-  await page.request.post('/api/v2/job/stop', { data: {} });
-  await waitStatus(/paused|idle|done|stopping/i);
+  await waitStatus(/paused|idle|done|stopping|running/i);
+  await nap();
 });

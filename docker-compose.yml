@@ -46,6 +46,8 @@ services:
     shm_size: 1g
     volumes:
       - ./:/workspace
+      - playwright-browsers:/ms-playwright
+      - playwright-node:/workspace/node_modules
     depends_on:
       timemachine:
         condition: service_healthy
@@ -55,13 +57,17 @@ services:
         condition: service_healthy
     environment:
       - BASE_URL=http://timemachine:9090
+      - NPM_CONFIG_CACHE=/tmp/.npm
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - PLAYWRIGHT_JUNIT_OUTPUT_NAME=/tmp/playwright-junit.xml
+      - NODE_PATH=/workspace/node_modules
     entrypoint:
       - bash
       - -lc
       - |
-        npm init -y >/dev/null 2>&1
         npm install --no-fund --no-audit @playwright/test@1.39.0
-        npx playwright test -c tests/playwright.config.ts
+        npx playwright install chromium
+        npx playwright test -c tests/playwright.config.ts --output /tmp/playwright-results --reporter=list
 
   timemachine:
     build: .
@@ -90,3 +96,10 @@ services:
 volumes:
   pgdata: {}
   chdata: {}
+  playwright-browsers: {}
+  playwright-node:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${PWD}/.node_modules

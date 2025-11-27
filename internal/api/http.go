@@ -92,7 +92,6 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		path    string
 		handler http.Handler
 	}{
-		{"/api/v1/job", http.HandlerFunc(s.handleJob)},
 		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
 		{"/api/v2/job/sensors/count", http.HandlerFunc(s.handleSensorCount)},
 		{"/api/v2/job", http.HandlerFunc(s.handleJobV2)},
@@ -105,17 +104,8 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		{"/api/v2/job/apply", http.HandlerFunc(s.wrapSimpleWithLog("apply", s.manager.Apply))},
 		{"/api/v2/job/step/forward", http.HandlerFunc(s.wrapSimpleWithLog("step_forward", s.manager.StepForward))},
 		{"/api/v2/job/step/backward", http.HandlerFunc(s.handleStepBackward)},
-		{"/api/v1/range", http.HandlerFunc(s.handleRange)},
-		{"/api/v1/job/pause", http.HandlerFunc(s.wrapSimple(s.manager.Pause))},
-		{"/api/v1/job/resume", http.HandlerFunc(s.wrapSimple(s.manager.Resume))},
-		{"/api/v1/job/stop", http.HandlerFunc(s.wrapSimple(s.manager.Stop))},
-		{"/api/v1/job/apply", http.HandlerFunc(s.wrapSimple(s.manager.Apply))},
-		{"/api/v1/job/step/forward", http.HandlerFunc(s.wrapSimple(s.manager.StepForward))},
-		{"/api/v1/job/step/backward", http.HandlerFunc(s.handleStepBackward)},
-		{"/api/v1/job/seek", http.HandlerFunc(s.handleSeek)},
-		{"/api/v1/job/state", http.HandlerFunc(s.handleState)},
-		{"/api/v1/snapshot", http.HandlerFunc(s.handleSnapshot)},
-		{"/api/v1/ws/state", http.HandlerFunc(s.handleWSState)},
+		{"/api/v2/snapshot", http.HandlerFunc(s.handleSnapshot)},
+		{"/api/v2/ws/state", http.HandlerFunc(s.handleWSState)},
 	}
 	for _, route := range apiRoutes {
 		s.mux.Handle(route.path, s.withCORS(route.handler))
@@ -198,6 +188,28 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 // handleSetRange сохраняет параметры диапазона без старта задачи.
 func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodGet:
+		min, max, count, err := s.manager.Range(r.Context())
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		resp := map[string]string{
+			"from": "",
+			"to":   "",
+		}
+		if !min.IsZero() {
+			resp["from"] = min.Format(time.RFC3339)
+		}
+		if !max.IsZero() {
+			resp["to"] = max.Format(time.RFC3339)
+		}
+		respMap := map[string]any{
+			"from":         resp["from"],
+			"to":           resp["to"],
+			"sensor_count": count,
+		}
+		writeJSON(w, http.StatusOK, respMap)
 	case http.MethodPost:
 		var req startRequest
 		if err := decodeJSON(r, &req); err != nil {
@@ -233,28 +245,6 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
 		s.manager.SetRange(from, to, step, req.Speed, window, req.SaveOutput)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-	case http.MethodGet:
-		min, max, count, err := s.manager.Range(r.Context())
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if min.IsZero() || max.IsZero() {
-			writeError(w, http.StatusNotFound, fmt.Errorf("no data range found"))
-			return
-		}
-		resp := map[string]any{
-			"from":         "",
-			"to":           "",
-			"sensor_count": count,
-		}
-		if !min.IsZero() {
-			resp["from"] = min.Format(time.RFC3339)
-		}
-		if !max.IsZero() {
-			resp["to"] = max.Format(time.RFC3339)
-		}
-		writeJSON(w, http.StatusOK, resp)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
@@ -404,34 +394,6 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		"duration_ms": time.Since(start).Milliseconds(),
 		"status":      "ok",
 	})
-}
-
-func (s *Server) handleRange(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-	min, max, count, err := s.manager.Range(r.Context())
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	resp := map[string]string{
-		"from": "",
-		"to":   "",
-	}
-	if !min.IsZero() {
-		resp["from"] = min.Format(time.RFC3339)
-	}
-	if !max.IsZero() {
-		resp["to"] = max.Format(time.RFC3339)
-	}
-	respMap := map[string]any{
-		"from":         resp["from"],
-		"to":           resp["to"],
-		"sensor_count": count,
-	}
-	writeJSON(w, http.StatusOK, respMap)
 }
 
 func (s *Server) handleWSState(w http.ResponseWriter, r *http.Request) {

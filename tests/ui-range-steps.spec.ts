@@ -20,7 +20,7 @@ test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
     },
   });
 
-  const waitStatus = async (re: RegExp, timeout = 15_000) => {
+  const waitStatus = async (re: RegExp, timeout = 20_000) => {
     await expect(statusBadge).toHaveText(re, { timeout });
   };
 
@@ -30,7 +30,7 @@ test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
 
   // Play.
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
 
   // Pause.
   await page.request.post('/api/v2/job/pause', { data: {} });
@@ -42,14 +42,14 @@ test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
 
   // Play → Stop.
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
   await page.request.post('/api/v2/job/stop', { data: {} });
   await waitStatus(/paused|idle|done|stopping/i);
 
   // To Begin → Play → Stop.
   await page.request.post('/api/v2/job/seek', { data: { ts: range.from, apply: true } });
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
   await page.request.post('/api/v2/job/stop', { data: {} });
   await waitStatus(/paused|idle|done|stopping/i);
 

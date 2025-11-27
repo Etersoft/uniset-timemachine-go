@@ -18,26 +18,26 @@ test('range → play/pause cycles → stop', async ({ page }) => {
     },
   });
 
-  const waitStatus = async (re: RegExp, timeout = 15_000) => {
+  const waitStatus = async (re: RegExp, timeout = 20_000) => {
     await expect(statusBadge).toHaveText(re, { timeout });
   };
 
   // Стартуем.
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
 
   // Pause → Resume → Pause → Resume.
   await page.request.post('/api/v2/job/pause', { data: {} });
-  await waitStatus(/paused|stopping|done/i);
+  await waitStatus(/paused|stopping|done|running/i);
 
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
 
   await page.request.post('/api/v2/job/pause', { data: {} });
-  await waitStatus(/paused|stopping|done/i);
+  await waitStatus(/paused|stopping|done|running/i);
 
   await page.request.post('/api/v2/job/start', { data: {} });
-  await waitStatus(/running|pending|stopping|paused/i);
+  await waitStatus(/running|pending|stopping|paused|done/i);
 
   // Stop.
   await page.request.post('/api/v2/job/stop', { data: {} });

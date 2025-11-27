@@ -12,13 +12,13 @@ import (
 
 // Params описывает настройки воспроизведения.
 type Params struct {
-	Sensors   []int64
-	From      time.Time
-	To        time.Time
-	Step      time.Duration
-	Window    time.Duration
-	Speed     float64
-	BatchSize int
+	Sensors    []int64
+	From       time.Time
+	To         time.Time
+	Step       time.Duration
+	Window     time.Duration
+	Speed      float64
+	BatchSize  int
 	SaveOutput bool `json:"save_output,omitempty"`
 }
 
@@ -630,19 +630,51 @@ func fastForwardFromCache(
 	eventCh, streamErr := fanInEvents(streamCtx, dataCh, errCh)
 
 	pending := make([]storage.SensorEvent, 0, 128)
-	// Собираем все события до закрытия канала, чтобы гарантированно применить их при перемотке.
+	// Собираем события, но не крутимся впустую: ждём либо новые данные, либо закрытие канала/контекст.
 	closed := false
-	for !closed {
-		pending, closed = drainEvents(eventCh, pending)
-		if closed || len(pending) > 0 {
-			continue
-		}
+	for {
 		select {
+		case ev, ok := <-eventCh:
+			if !ok {
+				closed = true
+				eventCh = nil
+				continue
+			}
+			pending = append(pending, ev)
+		case err := <-streamErr:
+			if err != nil {
+				return err
+			}
+			streamErr = nil
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(time.Millisecond):
+		default:
+			if closed || len(pending) > 0 {
+				goto doneCollect
+			}
+			// Ждём следующего события/закрытия без busy-loop.
+			select {
+			case ev, ok := <-eventCh:
+				if !ok {
+					closed = true
+					eventCh = nil
+					continue
+				}
+				pending = append(pending, ev)
+			case err := <-streamErr:
+				if err != nil {
+					return err
+				}
+				streamErr = nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
+
+doneCollect:
+	// dobWork
+	_ = closed
 
 	curTs := *stepTs
 

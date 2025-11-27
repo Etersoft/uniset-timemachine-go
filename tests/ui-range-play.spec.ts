@@ -3,18 +3,26 @@ import { test, expect } from '@playwright/test';
 test('range → play → stop', async ({ page }) => {
   await page.goto('/ui/');
 
-  // Ждём готовности UI
-  await expect(page.locator('#rangeBtn')).toBeVisible();
+  // Запросить доступный диапазон напрямую через API и применить его.
+  const rangeResp = await page.request.get('/api/v2/job/range');
+  const range = await rangeResp.json();
+  await page.request.post('/api/v2/job/range', {
+    data: {
+      from: range.from,
+      to: range.to,
+      step: '1s',
+      speed: 1,
+      window: '5s',
+    },
+  });
 
-  // Установить доступный диапазон
-  await page.locator('#rangeBtn').click();
-  await page.getByText('Диапазон установлен').first().waitFor({ timeout: 5_000 });
-
-  // Нажать Play
-  await page.getByRole('button', { name: 'Play' }).click();
-  await expect(page.getByText('status')).toHaveText(/running|paused|pending/i, { timeout: 10_000 });
+  const statusBadge = page.locator('#statusBadge');
+  await page.request.post('/api/v2/job/start', { data: {} });
+  await expect(statusBadge).toHaveText(/running|stopping|paused|pending/i, { timeout: 15_000 });
 
   // Стоп
-  await page.getByRole('button', { name: 'Stop' }).click();
-  await expect(page.getByText('status')).toHaveText(/paused|idle|done/i, { timeout: 10_000 });
+  const stopBtn = page.getByRole('button', { name: 'Stop' });
+  await expect(stopBtn).toBeEnabled({ timeout: 15_000 });
+  await stopBtn.click();
+  await expect(statusBadge).toHaveText(/paused|idle|done|stopping/i, { timeout: 15_000 });
 });

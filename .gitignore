@@ -1,5 +1,7 @@
 .gocache/
 .gomodcache/
+node_modules/
+cpu.pprof
 .env
 sqlite-large.db
 config/generated-sensors.xml

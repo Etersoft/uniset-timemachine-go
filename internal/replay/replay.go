@@ -617,6 +617,9 @@ func fastForwardFromCache(
 	if target.Equal(*stepTs) {
 		return nil
 	}
+	if !target.After(params.From) {
+		return nil
+	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -630,9 +633,9 @@ func fastForwardFromCache(
 	eventCh, streamErr := fanInEvents(streamCtx, dataCh, errCh)
 
 	pending := make([]storage.SensorEvent, 0, 128)
-	// Собираем события, но не крутимся впустую: ждём либо новые данные, либо закрытие канала/контекст.
+	// Собираем события до закрытия/до первой порции, без busy-loop.
 	closed := false
-	for {
+	for !closed && len(pending) == 0 {
 		select {
 		case ev, ok := <-eventCh:
 			if !ok {
@@ -648,33 +651,29 @@ func fastForwardFromCache(
 			streamErr = nil
 		case <-ctx.Done():
 			return ctx.Err()
+		}
+	}
+	// Дальше добираем всё, что успело прилететь.
+	for {
+		select {
+		case ev, ok := <-eventCh:
+			if !ok {
+				closed = true
+				eventCh = nil
+				continue
+			}
+			pending = append(pending, ev)
+		case err := <-streamErr:
+			if err != nil {
+				return err
+			}
+			streamErr = nil
 		default:
-			if closed || len(pending) > 0 {
-				goto doneCollect
-			}
-			// Ждём следующего события/закрытия без busy-loop.
-			select {
-			case ev, ok := <-eventCh:
-				if !ok {
-					closed = true
-					eventCh = nil
-					continue
-				}
-				pending = append(pending, ev)
-			case err := <-streamErr:
-				if err != nil {
-					return err
-				}
-				streamErr = nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			goto collected
 		}
 	}
 
-doneCollect:
-	// dobWork
-	_ = closed
+collected:
 
 	curTs := *stepTs
 

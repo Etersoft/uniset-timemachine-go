@@ -69,7 +69,6 @@ services:
     restart: unless-stopped
     command: >
       --http-addr 0.0.0.0:9090
-      --db clickhouse://default:@clickhouse:9000/uniset
       --confile config/test.xml
       --slist ALL
       --output stdout

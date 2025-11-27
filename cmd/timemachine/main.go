@@ -387,9 +387,6 @@ func makeParamFormatter(opt options, cfg *config.Config) sharedmem.ParamFormatte
 }
 
 func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors []int64, store storage.Storage) {
-	if opt.dbURL == "" {
-		log.Fatalf("serve mode requires --db storage")
-	}
 	saveAllowed := (strings.HasPrefix(strings.ToLower(opt.output), "http://") || strings.HasPrefix(strings.ToLower(opt.output), "https://") || opt.output == "") && opt.smSupplier != ""
 	service := replay.Service{
 		Storage:  store,

@@ -16,6 +16,15 @@ type ExampleStore struct {
 }
 
 func NewExampleStore(sensors []int64, from, to time.Time, step time.Duration) *ExampleStore {
+	if from.IsZero() {
+		from = time.Now().Add(-time.Hour)
+	}
+	if to.IsZero() || !to.After(from) {
+		to = from.Add(30 * time.Minute)
+	}
+	if step <= 0 {
+		step = time.Second
+	}
 	return &ExampleStore{
 		sensors: append([]int64(nil), sensors...),
 		from:    from,

@@ -328,10 +328,9 @@ func (s *StateStreamer) flushBatch() {
 			}
 			msg.U = append(msg.U, []float64{float64(r.ID), r.Value, has})
 		}
+		// Только если есть строки — рассылаем. Пустые батчи не трогаем, чтобы не будить клиентов.
+		s.broadcastLocked(msg)
 	}
-
-	// Даже при пустых обновлениях отправляем метаданные шага, чтобы UI видел прогресс.
-	s.broadcastLocked(msg)
 }
 
 // --- WebSocket utils (минимальная реализация только для server-push) ---

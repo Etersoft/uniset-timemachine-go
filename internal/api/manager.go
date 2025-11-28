@@ -88,11 +88,11 @@ func (m *Manager) StartPending(ctx context.Context) error {
 	}
 	if seekSet {
 		if err := m.Seek(seekTs, false); err != nil {
-			log.Printf("[manager] pending seek apply failed: %v", err)
+			logDebugf("[manager] pending seek apply failed: %v", err)
 		} else {
 			// После отложенного seek остаёмся в paused внутри сервиса; нужно возобновить.
 			if err := m.Resume(); err != nil {
-				log.Printf("[manager] pending seek resume failed: %v", err)
+				logDebugf("[manager] pending seek resume failed: %v", err)
 			}
 		}
 	}
@@ -106,13 +106,13 @@ func (m *Manager) SetRange(from, to time.Time, step time.Duration, speed float64
 	save := m.defaults.saveAllowed && saveOutput
 	m.pending.rangeSet = true
 	m.pending.rng = replay.Params{
-		Sensors:   append([]int64(nil), m.sensors...),
-		From:      from,
-		To:        to,
-		Step:      step,
-		Speed:     speed,
-		Window:    window,
-		BatchSize: m.defaults.batchSize,
+		Sensors:    append([]int64(nil), m.sensors...),
+		From:       from,
+		To:         to,
+		Step:       step,
+		Speed:      speed,
+		Window:     window,
+		BatchSize:  m.defaults.batchSize,
 		SaveOutput: save,
 	}
 }
@@ -149,13 +149,13 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 
 	ctrlCh := make(chan replay.Command, 16)
 	params := replay.Params{
-		Sensors:   append([]int64(nil), m.sensors...),
-		From:      from,
-		To:        to,
-		Step:      step,
-		Window:    window,
-		Speed:     speed,
-		BatchSize: m.defaults.batchSize,
+		Sensors:    append([]int64(nil), m.sensors...),
+		From:       from,
+		To:         to,
+		Step:       step,
+		Window:     window,
+		Speed:      speed,
+		BatchSize:  m.defaults.batchSize,
 		SaveOutput: save,
 	}
 
@@ -181,7 +181,7 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 		err := m.service.RunWithControl(jobCtx, params, replay.Control{
 			Commands: ctrlCh,
 			OnStep: func(info replay.StepInfo) {
-				log.Printf("[event] step=%d ts=%s updates=%d", info.StepID, info.StepTs.Format(time.RFC3339), info.UpdatesCount)
+				logDebugf("[event] step=%d ts=%s updates=%d", info.StepID, info.StepTs.Format(time.RFC3339), info.UpdatesCount)
 				m.mu.Lock()
 				defer m.mu.Unlock()
 				if m.job == nil {
@@ -516,7 +516,7 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 	if !cmd.TS.IsZero() {
 		tsStr = cmd.TS.Format(time.RFC3339)
 	}
-	log.Printf("[command] send %v apply=%t ts=%s", cmd.Type, cmd.Apply, tsStr)
+	logDebugf("[command] send %v apply=%t ts=%s", cmd.Type, cmd.Apply, tsStr)
 	select {
 	case m.job.commands <- cmd:
 	default:
@@ -526,10 +526,10 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 	m.mu.Unlock()
 	select {
 	case err := <-resp:
-		log.Printf("[command] result %v err=%v", cmd.Type, err)
+		logDebugf("[command] result %v err=%v", cmd.Type, err)
 		return err
 	case <-time.After(30 * time.Second):
-		log.Printf("[command] timeout %v", cmd.Type)
+		logDebugf("[command] timeout %v", cmd.Type)
 		return fmt.Errorf("command timeout")
 	}
 }

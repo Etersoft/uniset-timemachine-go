@@ -50,6 +50,7 @@ type options struct {
 	logFile       string
 	verbose       bool
 	logCache      bool
+	debugLogs     bool
 	version       bool
 	showRange     bool
 	generateCfg   string
@@ -171,6 +172,7 @@ func parseFlags() options {
 	flag.StringVar(&opt.logFile, "log-file", "", "write logs to file instead of stderr")
 	flag.BoolVar(&opt.verbose, "v", false, "verbose logging (SM HTTP requests)")
 	flag.BoolVar(&opt.logCache, "log-cache", false, "log replay cache hits/misses")
+	flag.BoolVar(&opt.debugLogs, "debug", false, "enable verbose debug logs for HTTP/control")
 	flag.BoolVar(&opt.version, "version", false, "print version and exit")
 	flag.BoolVar(&opt.showRange, "show-range", false, "print available time range and exit")
 	flag.StringVar(&opt.generateCfg, "generate-config", "", "write example YAML config to file (use '-' for stdout); default: config/config-example.yaml")
@@ -395,6 +397,7 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 	}
 	streamer := api.NewStateStreamer(opt.wsBatchTime)
 	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer, saveAllowed, opt.saveOutput)
+	api.SetDebugLogging(opt.debugLogs)
 	server := api.NewServer(manager, streamer)
 	addr := opt.httpAddr
 	if addr == "" {

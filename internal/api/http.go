@@ -31,6 +31,7 @@ func NewServer(manager *Manager, streamer *StateStreamer) *Server {
 	if err != nil {
 		log.Fatalf("ui assets: %v", err)
 	}
+	// Debug logging can be enabled via SetDebugLogging(true) before Listen().
 	s := &Server{
 		manager:  manager,
 		mux:      http.NewServeMux(),
@@ -143,7 +144,7 @@ func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		log.Printf("[http] job start from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
+		logDebugf("[http] job start from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
 		if err := s.manager.Start(r.Context(), from, to, step, req.Speed, window, req.SaveOutput); err != nil {
 			code := http.StatusBadRequest
 			if err.Error() == "job is already active" {
@@ -242,7 +243,7 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 		if req.Speed <= 0 {
 			req.Speed = 1
 		}
-		log.Printf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
+		logDebugf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
 		s.manager.SetRange(from, to, step, req.Speed, window, req.SaveOutput)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	default:
@@ -266,7 +267,7 @@ func (s *Server) handleSetSeek(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid ts: %w", err))
 		return
 	}
-	log.Printf("[http] set seek v2 ts=%s apply=%t", ts.Format(time.RFC3339), req.Apply)
+	logDebugf("[http] set seek v2 ts=%s apply=%t", ts.Format(time.RFC3339), req.Apply)
 	if err := s.manager.Seek(ts, req.Apply); err != nil {
 		if err.Error() == "no active job" || err.Error() == "job is already finished" {
 			log.Printf("[http] set pending seek ts=%s (pending: %v)", ts.Format(time.RFC3339), err)
@@ -288,7 +289,7 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 	}
 	var req resumeRequest
 	_ = decodeJSON(r, &req) // тело может быть пустым
-	log.Printf("[http] command resume save_output=%v", req.SaveOutput)
+	logDebugf("[http] command resume save_output=%v", req.SaveOutput)
 	if req.SaveOutput != nil {
 		if err := s.manager.SetSaveOutput(*req.SaveOutput); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -316,7 +317,7 @@ func (s *Server) handleStartPending(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, err)
 		return
 	}
-	log.Printf("[http] start pending")
+	logDebugf("[http] start pending")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "running"})
 }
 
@@ -330,7 +331,7 @@ func (s *Server) handleStepBackward(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	log.Printf("[http] command step_backward apply=%t", req.Apply)
+	logDebugf("[http] command step_backward apply=%t", req.Apply)
 	if err := s.manager.StepBackward(req.Apply); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -353,7 +354,7 @@ func (s *Server) handleSeek(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid ts: %w", err))
 		return
 	}
-	log.Printf("[http] command seek ts=%s apply=%t", ts.Format(time.RFC3339), req.Apply)
+	logDebugf("[http] command seek ts=%s apply=%t", ts.Format(time.RFC3339), req.Apply)
 	if err := s.manager.Seek(ts, req.Apply); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -462,7 +463,7 @@ func (s *Server) wrapSimpleWithLog(label string, fn func() error) http.HandlerFu
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		log.Printf("[http] command %s", label)
+		logDebugf("[http] command %s", label)
 		if err := fn(); err != nil {
 			if errors.Is(err, replay.ErrStopped{}) {
 				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -524,6 +525,7 @@ func decodeJSON(r *http.Request, v interface{}) error {
 func writeError(w http.ResponseWriter, code int, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
+	log.Printf("[http] error %d: %v", code, err)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 }
 

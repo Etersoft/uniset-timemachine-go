@@ -37,7 +37,7 @@ test('ws indicator switches to warn on disconnect', async ({ page, context }) =>
   // Имитация обрыва сети/WS.
   await context.setOffline(true);
   await page.waitForTimeout(2000);
-  await expect(wsChip).toContainText('ws —', { timeout: 10_000 });
+  await expect(wsChip).toHaveClass(/warn|err/i, { timeout: 10_000 });
   await context.setOffline(false);
 
   await page.request.post('/api/v2/job/stop', { data: {} });

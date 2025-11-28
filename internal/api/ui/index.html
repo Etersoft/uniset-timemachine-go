@@ -260,6 +260,7 @@
                   </select>
                 </th>
                 <th>Text</th>
+                <th style="width:80px; text-align:center;">Тип</th>
                 <th style="width:60px; text-align:center;"></th>
               </tr>
             </thead>
@@ -566,6 +567,17 @@
     syncSaveToggle();
 
     setInterval(updateWsChip, 1000);
+    window.addEventListener('offline', () => {
+      state.ws = null;
+      state.wsBytes = [];
+      updateWsChip();
+    });
+    window.addEventListener('online', () => {
+      updateWsChip();
+      if (!state.ws) {
+        connectWS();
+      }
+    });
 
     window.__setTestIndicator = (active, text = 'Идёт тестирование…') => {
       state.testRunning = !!active;
@@ -705,9 +717,10 @@
       const total = state.wsBytes.reduce((acc, item) => acc + item.n, 0);
       const windowSec = 5;
       const speed = total / windowSec;
-      els.wsSpeed.textContent = `ws ${formatSpeed(speed)}`;
-      els.wsSpeed.classList.toggle('ok', !!state.ws);
-      els.wsSpeed.classList.toggle('warn', !state.ws);
+      const online = !!state.ws;
+      els.wsSpeed.textContent = `ws ${online ? formatSpeed(speed) : '—'}`;
+      els.wsSpeed.classList.toggle('ok', online);
+      els.wsSpeed.classList.toggle('warn', !online);
     }
 
     function setTab(tab) {
@@ -924,6 +937,7 @@
         const isChanged = r.changedAt && now - r.changedAt < 4000;
         const value = r.hasValue ? formatTableValue(r.value) : '—';
         const metaText = tableState.meta.get(r.id)?.textname || sensorIndex.byId.get(r.id)?.textname || '';
+        const metaType = tableState.meta.get(r.id)?.iotype || sensorIndex.byId.get(r.id)?.iotype || '';
         const text = r.textname || metaText || '';
         const checked = tableState.selected.has(r.id) ? 'checked' : '';
         const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`;
@@ -932,10 +946,11 @@
           <td>${r.name || ''}</td>
           <td class="value">${value}</td>
           <td>${text}</td>
+          <td style="text-align:center;">${metaType || ''}</td>
           <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.id}" title="Добавить на график">📊</button></td>
         </tr>`;
       }).join('');
-      els.table.body.innerHTML = html || `<tr><td colspan="5" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
+      els.table.body.innerHTML = html || `<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
       if (els.table.meta) {
         const ts = tableState.lastTs || '—';
         const total = getFilteredTableRows(false).length;
@@ -2068,6 +2083,7 @@
       const params = state.model.params || state.model.Params || {};
       const pending = state.model.pending || state.model.Pending || {};
       const range = getEffectiveRange(params, pending);
+      const pendingRange = !!(pending?.range_set || pending?.RangeSet);
       const active = st === 'running' || st === 'paused' || st === 'stopping';
       const paused = st === 'paused';
       const curTs = currentTsFromServer();
@@ -2079,7 +2095,7 @@
       setDisabled(els.controls.stepBack, !canStep || atStart);
       setDisabled(els.controls.stepFwd, !canStep || atEnd);
       setDisabled(els.controls.stop, !active);
-      const hasRange = range.valid && (active || (st === 'pending' && state.rangePicked)); // диапазон считаем заданным только если он активен или пользователь выбрал его в этой сессии
+      const hasRange = range.valid && (active || pendingRange || state.rangePicked); // диапазон считаем заданным если активен, есть pending или пользователь выбрал его в этой сессии
       setDisabled(els.controls.playPause, st === 'failed' || !hasRange);
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';

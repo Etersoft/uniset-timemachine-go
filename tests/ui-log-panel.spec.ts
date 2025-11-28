@@ -24,6 +24,15 @@ test('log panel shows entries and clears on click', async ({ page }) => {
   await setValue('#from', range.from);
   await setValue('#to', range.to);
 
+  // Устанавливаем диапазон через API, чтобы кнопка старта стала доступна.
+  await page.request.post('/api/v2/job/range', {
+    data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
+    return !!el && !el.disabled;
+  }, { timeout: 15_000 });
+
   const logEntries = page.locator('#log .log-entry');
   const clearBtn = page.locator('#clearLogBtn');
   const playBtn = page.locator('#playPauseBtn');

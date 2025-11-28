@@ -1,6 +1,6 @@
 # uniset-timemachine-go
 
-Консольный проигрыватель истории датчиков на Go. Читает изменения из PostgreSQL/SQLite/ClickHouse, интерполирует состояния на шаге и публикует их в SharedMemory либо stdout. Поддерживает HTTP-режим управления (pause/resume/step/seek/apply) поверх того же ядра.
+Консольный проигрыватель истории датчиков на Go. Читает изменения из PostgreSQL/SQLite/ClickHouse, интерполирует состояния на шаге и публикует их в SharedMemory либо stdout. Поддерживает HTTP-режим управления v2 (pending range/seek, старт через `/api/v2/job/start`) поверх того же ядра.
 
 ## Внутренние модули
 - `cmd/timemachine` — CLI и HTTP-режим (`--http-addr`), разбор флагов.
@@ -16,9 +16,9 @@
 - UniSet XML (`config/test.xml`) — берём датчики из секции `<sensors><item id="..." name="..." textname="..."/>`.
 - Упрощённый JSON (`config/example.json`) — удобно для быстрых тестов и моков.
 
-CLI принимает флаг `--confile` с путём к XML/JSON и `--slist` с именем набора (или `ALL`, или списком имён). Дополнительно поддерживаются glob-паттерны (`--slist "Sensor100*"` выберет все сенсоры из блока `Sensor100XX_S`). Для XML наборы не задаются и `--slist` должен перечислять имена вручную/по шаблону или использовать `ALL`. Выход по умолчанию — SharedMemory HTTP API (`--output http`) c параметрами:
+CLI принимает флаг `--confile` с путём к XML/JSON и `--slist` с именем набора (или `ALL`, или списком имён). Дополнительно поддерживаются glob-паттерны (`--slist "Sensor100*"` выберет все сенсоры из блока `Sensor100XX_S`). Для XML наборы не задаются и `--slist` должен перечислять имена вручную/по шаблону или использовать `ALL`. Выход по умолчанию — `stdout`; для SharedMemory используйте `--output http://...`:
 
-- `--output http://...` — базовый URL SharedMemory (по умолчанию `http://localhost:8998`). `stdout` — вывод в стандартный поток.
+- `--output http://...` — базовый URL SharedMemory (пример `http://localhost:9191/api/v01/SharedMemory`). `stdout` — вывод в стандартный поток.
 - `--sm-supplier` — имя процесса (по умолчанию `TimeMachine`, используйте реальное имя при включённой проверке прав).
 - `--sm-param-mode` — формат параметров (`id` или `name`, по умолчанию `id`; режим `name` берёт имена из конфигурации).
 - `--sm-param-prefix` — префикс перед ID (по умолчанию `id`, установите пустую строку `--sm-param-prefix ""`, чтобы отправлять только числа).
@@ -42,8 +42,8 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
   --confile config/test.xml --slist ALL --ws-batch-time 100ms
 ```
 
-Далее управляйте через HTTP (start/pause/resume/step/seek/apply/snapshot, status/state). Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
-Встроенный UI доступен по `/ui/`: включает кнопки Smoke/Flow для быстрого сценария, зелёный индикатор «идёт тестирование…» в панели статусов и выгрузку лога теста в JSON (кнопка появляется только если лог сохранён). Добавлена вкладка «Графики» на uPlot для выбранных датчиков (выбор по id/name, легенда/оси, быстрый буфер обновлений).
+Далее управляйте через HTTP v2: `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
+Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot) и подсказки по датчикам.
 
 Пример YAML для serve-режима (см. `config/config.yaml`) включает адрес HTTP-сервера:
 

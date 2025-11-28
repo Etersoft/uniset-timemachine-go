@@ -22,6 +22,15 @@ test('websocket indicator and speed updates when playing', async ({ page }) => {
   await setValue('#from', range.from);
   await setValue('#to', range.to);
 
+  // Проставляем диапазон через API, чтобы play стало доступно.
+  await page.request.post('/api/v2/job/range', {
+    data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
+    return !!el && !el.disabled;
+  }, { timeout: 15_000 });
+
   const wsChip = page.locator('#wsSpeedChip');
   const statusBadge = page.locator('#statusBadge');
 

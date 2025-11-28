@@ -29,6 +29,15 @@ test('front-end issues HTTP requests on load and start/stop', async ({ page }) =
   await setValue('#from', range.from);
   await setValue('#to', range.to);
 
+  // Проставляем диапазон через API, чтобы play стало доступно.
+  await page.request.post('/api/v2/job/range', {
+    data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
+    return !!el && !el.disabled;
+  }, { timeout: 15_000 });
+
   // Ждём, пока фронт отправит range и start.
   const rangeResponsePromise = page.waitForResponse(
     (resp) => resp.url().includes('/api/v2/job/range') && resp.request().method() === 'POST',

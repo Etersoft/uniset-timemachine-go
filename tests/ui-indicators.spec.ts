@@ -31,6 +31,15 @@ test('indicators reflect running state', async ({ page }) => {
   const pollingChip = page.locator('#pollingChip');
   const wsChip = page.locator('#wsSpeedChip');
 
+  // Подготовка диапазона через API, чтобы play стало доступно.
+  await page.request.post('/api/v2/job/range', {
+    data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
+  });
+  await page.waitForFunction(() => {
+    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
+    return !!el && !el.disabled;
+  }, { timeout: 15_000 });
+
   await page.click('#playPauseBtn');
   await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
 

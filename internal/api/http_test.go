@@ -179,6 +179,53 @@ func TestStartPendingWithoutRange(t *testing.T) {
 	}
 }
 
+func TestSensorsEndpoint(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/v2/sensors")
+	if err != nil {
+		t.Fatalf("get sensors: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sensors status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode sensors: %v", err)
+	}
+	if _, ok := body["count"]; !ok {
+		t.Fatalf("sensors response missing count: %#v", body)
+	}
+}
+
+func TestJobGetState(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/api/v2/job")
+	if err != nil {
+		t.Fatalf("get job: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("job status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestCORSOptions(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+	req, _ := http.NewRequest(http.MethodOptions, ts.URL+"/api/v2/job/range", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("options request: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("options status = %d, want 204", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
 func TestStepBackwardSeekApplySnapshot(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()

@@ -4,6 +4,14 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
+  // Установим рабочий список датчиков (на случай если UI не успел загрузить).
+  const sensorsResp = await page.request.get('/api/v2/sensors');
+  const sensors = (await sensorsResp.json())?.sensors ?? [];
+  const ids = sensors.slice(0, 10).map((s: any) => s.id).filter((id: any) => Number.isFinite(Number(id)));
+  if (ids.length) {
+    await page.request.post('/api/v2/job/sensors', { data: { sensors: ids } });
+  }
+
   const statusBadge = page.locator('#statusBadge');
   const stepInput = page.locator('#step');
   const speedInput = page.locator('#speed');
@@ -18,10 +26,13 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   const job = await jobResp.json();
   const saveAllowed = !!(job.save_allowed ?? job.SaveAllowed);
 
+  const fallbackFrom = range.from || '2024-06-01T00:00:00Z';
+  const fallbackTo = range.to || '2024-06-01T00:00:10Z';
+
   // Подготовка диапазона через API, чтобы play стало доступно.
   const rangePayload = {
-    from: range.from,
-    to: range.to,
+    from: fallbackFrom,
+    to: fallbackTo,
     step: '1s',
     speed: 1,
     window: '5s',
@@ -45,8 +56,8 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
     );
   };
 
-  await setValue('#from', range.from);
-  await setValue('#to', range.to);
+  await setValue('#from', rangePayload.from);
+  await setValue('#to', rangePayload.to);
   await setValue('#step', '2s');
   await setValue('#speed', '2');
   await setValue('#window', '10s');
@@ -62,8 +73,9 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
   await page.waitForTimeout(300);
 
-  const afterJobResp = await page.request.get('/api/v2/job');
-  const afterJob = await afterJobResp.json();
+  // Ждём, пока /job отдаст актуальные параметры.
+  await page.waitForTimeout(400);
+  const afterJob = await page.request.get('/api/v2/job').then(r => r.json());
   const params = afterJob.params || afterJob.Params || {};
 
   const stepNs = params.Step ?? params.step;

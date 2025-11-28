@@ -15,6 +15,8 @@
 - Эндпоинты:
   - `GET /healthz` — liveness.
   - `GET /api/v2/sensors` — список всех датчиков из конфига (`id,name,textname,iotype`) и `count`.
+  - `GET /api/v2/job/sensors` — текущий рабочий список ID, `count`, `default` (true если выбран весь словарь).
+  - `POST /api/v2/job/sensors` — применить рабочий список. Body `{"sensors":[...]}`; ответ: `status`, `sensors` (принятый список), `accepted_count`, `rejected`, `count`, `default`. Если все отсутствуют в словаре — `400`.
 - `GET /api/v2/job` — текущее состояние: `status` (`idle|running|paused|stopping|done|failed`), `params`, `pending`, `started_at`, `finished_at`, `step_id`, `last_ts`, `updates_sent`, `error`, `save_allowed`, `save_output`.
 - `GET /api/v2/job/range` — доступный диапазон и количество датчиков в истории: `{"from","to","sensor_count"}`.
 - `POST /api/v2/job/range` — подготовка диапазона без старта. Body: `from`, `to` (RFC3339), `step` (duration), `speed` (float, опционально), `window` (duration, опционально), `save_output` (bool).
@@ -125,6 +127,7 @@ type HistoryRow struct {
   - имя набора — раскрыть через `sets`,
   - список через запятую (например, `sensor1,sensor5`),
   - glob-паттерны (например, `Sensor100*`).
+- При запуске HTTP-сервера рабочий список по умолчанию — «все датчики». Его можно переопределить через `POST /api/v2/job/sensors`; UI восстанавливает как словарь (`/api/v2/sensors`), так и текущий рабочий набор (`/api/v2/job/sensors`) при загрузке или переподключении.
 - `pkg/config` должен предоставить:
 
 ```go
@@ -147,3 +150,4 @@ func (c *Config) Resolve(set string) ([]int64, error)
 - Все сообщения console/лог UI захватываются и сохраняются в `localStorage` (`tm-ui-test-log`) с отметкой ok/error; кнопка «Скачать лог» отображается только если сохранён лог, выгрузка — JSON.
 - Перед запуском теста таймлайн запоминает позицию и восстанавливается после завершения; тесты гарантированно делают `stop`, чтобы не оставлять активную задачу.
 - Вкладка «Графики» использует uPlot: выбор датчиков (id/name), легенда и оси, буфер обновлений из WS; при отсутствии лога кнопка выгрузки скрыта.
+- На вкладке «Управление» есть кнопка «Загрузить» для выбора рабочего списка (из файла или из списка датчиков). Текущий список отображается в статусе; Play доступен только при непустом списке.

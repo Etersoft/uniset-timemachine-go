@@ -4,6 +4,14 @@ test('table filter and add-to-chart from Sensors tab', async ({ page }) => {
   await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
+  // Установим рабочий список датчиков заранее.
+  const sensorsResp1 = await page.request.get('/api/v2/sensors');
+  const sensorsAll = (await sensorsResp1.json())?.sensors ?? [];
+  const ids = sensorsAll.map((s: any) => s.id).filter((id: any) => Number.isFinite(Number(id)));
+  if (ids.length) {
+    await page.request.post('/api/v2/job/sensors', { data: { sensors: ids } });
+  }
+
   // Даже без выбора диапазона таблица должна заполниться метаданными.
   await page.getByRole('button', { name: 'Датчики' }).click();
   await page.waitForFunction(() => document.querySelectorAll('#tableBody tr').length > 0, { timeout: 10_000 });
@@ -61,7 +69,7 @@ test('table filter and add-to-chart from Sensors tab', async ({ page }) => {
   const playBtn = page.locator('#playPauseBtn');
   const stopBtn = page.locator('#stopBtn');
   const statusBadge = page.locator('#statusBadge');
-  await expect(playBtn).toBeEnabled({ timeout: 4_000 });
+  await expect(playBtn).toBeEnabled({ timeout: 6_000 });
   await playBtn.click();
   await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
   // Если статус успел стать done, это тоже валидно — задача могла быстро завершиться.

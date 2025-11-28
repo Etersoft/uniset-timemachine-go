@@ -18,14 +18,15 @@ import (
 type Manager struct {
 	mu sync.Mutex
 
-	service    replay.Service
-	sensors    []int64
-	defaults   defaults
-	job        *job
-	jobCancel  context.CancelFunc
-	streamer   *StateStreamer
-	sensorInfo map[int64]SensorInfo
-	pending    pendingState
+	service        replay.Service
+	sensors        []int64
+	defaultSensors []int64
+	defaults       defaults
+	job            *job
+	jobCancel      context.CancelFunc
+	streamer       *StateStreamer
+	sensorInfo     map[int64]SensorInfo
+	pending        pendingState
 }
 
 type defaults struct {
@@ -63,10 +64,12 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 		// По умолчанию рабочий список — полный словарь из конфига.
 		sensors = metaIDs
 	}
+	defaultSensors := append([]int64(nil), sensors...)
 	info := BuildSensorInfo(cfg, metaIDs)
 	m := &Manager{
-		service: service,
-		sensors: sensors,
+		service:        service,
+		sensors:        sensors,
+		defaultSensors: defaultSensors,
 		defaults: defaults{
 			speed:       speed,
 			window:      window,
@@ -92,6 +95,9 @@ func (m *Manager) Reset() {
 	}
 	m.job = nil
 	m.pending = pendingState{}
+	if len(m.defaultSensors) > 0 {
+		m.sensors = append([]int64(nil), m.defaultSensors...)
+	}
 	// Обновляем streamer новым слепком сенсоров, чтобы клиенты получили reset.
 	if m.streamer != nil {
 		clone := make(map[int64]SensorInfo, len(m.sensorInfo))

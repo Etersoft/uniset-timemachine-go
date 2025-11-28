@@ -220,11 +220,15 @@ func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		all := s.manager.Sensors()
+		working := s.manager.WorkingSensors()
 		writeJSON(w, http.StatusOK, map[string]any{
-			"status":   "ok",
-			"accepted": accepted,
-			"rejected": rejected,
-			"count":    accepted,
+			"status":         "ok",
+			"sensors":        working,
+			"accepted_count": accepted,
+			"rejected":       rejected,
+			"count":          len(working),
+			"default":        len(working) == len(all),
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

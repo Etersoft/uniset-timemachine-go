@@ -1,6 +1,6 @@
 # HTTP API управления
 
-API однозадачное: в любой момент может быть только одна активная задача (running/paused). Параметры БД/SM/таблицы задаются только при запуске сервера (`timemachine --http-addr ...`), через API передаются лишь границы периода, шаг и параметры шага.
+API однозадачное: в любой момент может быть только одна активная задача (running/paused). Параметры БД/SM/таблицы задаются только при запуске сервера (`timemachine --http-addr ...`), через API передаются лишь границы периода, шаг и параметры шага. Рабочий список датчиков хранится на сервере: по умолчанию — все датчики из конфига, менять через `POST /api/v2/job/sensors`. При пустом списке `range/start` вернут `400`.
 
 ## Запуск сервера
 
@@ -24,10 +24,12 @@ go run ./cmd/timemachine \
 - `GET /api/v2/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`. Без upgrade вернёт `400/426`, а при отсутствующем streamer — `503`.
 - `/debug/pprof/*` — стандартные endpoint’ы pprof для съёма профилей (CPU/heap/trace) во время работы.
 
-### API v2 (pending range/seek)
+### API v2 (pending range/seek, рабочий список)
 
-- `GET /api/v2/sensors` — список датчиков (`id,name,textname,iotype`) и `count`.
-- `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне.
+- `GET /api/v2/sensors` — словарь всех датчиков (`id,name,textname,iotype`) и `count`. Используется UI для автодополнения.
+- `GET /api/v2/job/sensors` — текущий рабочий список ID, которым оперирует проигрыватель. Возвращает `sensors`, `count`, `default` (true, если выбран весь список).
+- `POST /api/v2/job/sensors` — установить рабочий список. Body: `{"sensors":[id1,id2,...]}`. Ответ: `status`, `sensors` (принятый список), `accepted_count`, `rejected` (число отброшенных), `count`, `default` (true, если выбран весь список). Если переданы только невалидные ID — `400`.
+- `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне истории.
 - `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max и `sensor_count`.
 - `POST /api/v2/job/seek` — перемотка; если job не запущен, запоминает pending seek.
 - `POST /api/v2/job/start` — запустить задачу, используя pending range/seek.
@@ -126,6 +128,7 @@ curl -s http://localhost:8080/healthz   # ok
 
 ## Поведение и ограничения
 
+- Рабочий список датчиков хранится на сервере. По умолчанию при старте/`/reset` выбираются все датчики из словаря. Если рабочий список пуст, команды `range/start` вернут `400`. Менять список можно через `POST /api/v2/job/sensors` или из UI.
 - Только одна активная задача (running/paused/stopping). Новый старт при активной — `409`.
 - Шаг назад и seek переигрывают историю до нужного времени без промежуточных отправок в SM.
 - Шаг вперёд/назад выполняются из `paused` и оставляют задачу в `paused`; при достижении начала/конца диапазона кнопки в UI блокируются.

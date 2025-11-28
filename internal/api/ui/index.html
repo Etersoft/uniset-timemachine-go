@@ -57,6 +57,7 @@
     .timeline-label { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: #cbd5e1; }
     .player { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
     .toggle { display: flex; align-items: center; gap: 6px; color: #cbd5e1; font-size: 13px; }
+    .placeholder-muted::placeholder { color: #64748b; opacity: 0.7; }
     .log { background: #0b1324; border: 1px solid #1f2937; border-radius: 12px; padding: 12px; max-height: 280px; overflow: auto; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12px; color: #e2e8f0; }
     .log-entry { padding: 7px 8px; border-radius: 8px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.03); }
     .log-entry.ok { border-color: rgba(16,185,129,0.4); }
@@ -67,8 +68,8 @@
     dialog::backdrop { background: rgba(0,0,0,0.55); }
     .dlg-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
     .tabs { display: flex; gap: 10px; margin: 16px 0 4px; }
-    .tab { padding: 10px 14px; border-radius: 12px; border: 1px solid #1f2937; background: #0f172a; color: #e2e8f0; font-weight: 700; cursor: pointer; }
-    .tab.active { border-color: #22d3ee; box-shadow: 0 8px 24px rgba(34,211,238,0.16); }
+    .tab { padding: 10px 14px; border-radius: 12px; border: 1px solid #1f2937; background: #0c1625; color: #cbd5e1; font-weight: 700; cursor: pointer; opacity: 0.75; }
+    .tab.active { border-color: #22d3ee; box-shadow: 0 8px 24px rgba(34,211,238,0.16); background: #10253a; color: #e5e7eb; opacity: 1; }
     .tab-panel { display: none; }
     .tab-panel.active { display: block; }
     .table-wrap { overflow: auto; max-height: 520px; border: 1px solid #1f2937; border-radius: 12px; }
@@ -161,11 +162,17 @@
 
     <div id="panel-control" class="tab-panel active">
     <div class="card">
-      <div class="row wrap" style="gap:12px; align-items:flex-end;">
+      <div class="row" style="gap:12px; align-items:flex-end; justify-content:space-between; flex-wrap:wrap;">
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+          <button id="workingLoadBtn" class="ghost" type="button" style="padding:8px 10px; min-width:120px; font-size:13px;">Загрузить</button>
+          <div id="workingMeta" class="muted" style="font-size:13px;">Рабочий список датчиков: —</div>
+        </div>
+      </div>
+      <div class="row wrap" style="gap:12px; align-items:flex-end; margin-top:6px;">
         <div style="flex:2; min-width: 320px;">
           <label>Диапазон</label>
           <button id="rangePickerBtn" class="ghost" type="button" style="width:100%; text-align:left; padding:12px 12px;">
-            Диапазон: <span id="rangeLabelValue" style="color:#fbbf24;">не задан</span>
+            <span id="rangeLabelValue" style="color:#fbbf24;">не задан</span>
           </button>
         </div>
         <div style="flex:1; min-width: 160px;">
@@ -391,6 +398,62 @@
     </form>
   </dialog>
 
+  <dialog id="sensorsDialog">
+    <form method="dialog" style="min-width:640px;">
+      <h3 style="margin:0 0 6px;">Рабочий список датчиков</h3>
+      <p class="muted" style="margin:0 0 10px;">Выберите датчики, с которыми будет работать плеер. По умолчанию используются все.</p>
+      <div class="tabs" id="sensorsTabs" style="margin-top:8px;">
+        <button type="button" class="tab active" data-sensortab="existing">Выбрать из существующих</button>
+        <button type="button" class="tab" data-sensortab="file">Загрузить из файла</button>
+      </div>
+      <div class="tab-panel active" id="sensorsPanelExisting">
+        <div style="border-top:1px solid #1f2937; padding-top:12px; margin-top:10px;">
+        <div class="row wrap" style="gap:8px; align-items:center; margin-bottom:8px;">
+          <div style="flex:1; min-width:220px;">
+            <label for="sensorsFilter">Фильтр</label>
+            <input id="sensorsFilter" type="text" placeholder="Введите имя или текст...">
+          </div>
+          <label class="toggle" style="margin-top:18px;">
+            <input id="sensorsSelectAll" type="checkbox" style="width:16px; height:16px;">
+            <span>Выбрать все</span>
+          </label>
+        </div>
+        <div class="table-wrap" style="max-height:320px; min-height:220px;">
+          <table>
+            <thead><tr>
+              <th style="text-align:center; width:36px;"></th>
+              <th>Датчик</th>
+              <th>Имя</th>
+              <th style="text-align:center; width:80px;">Тип</th>
+            </tr></thead>
+            <tbody id="sensorsDialogBody"></tbody>
+          </table>
+        </div>
+        <div class="table-meta" id="sensorsDialogMeta" style="margin-top:6px;">—</div>
+        </div>
+      </div>
+      <div class="tab-panel" id="sensorsPanelFile">
+        <div style="border-top:1px solid #1f2937; padding-top:12px; margin-top:10px;">
+          <div style="margin-bottom:12px;">
+            <label for="sensorsFileInput">Файл со списком (id или name на строку)</label>
+            <input id="sensorsFileInput" type="file" accept=".txt,.lst,.csv">
+          </div>
+          <div style="margin-top:12px;">
+            <label for="sensorsFileArea">Или вставьте список вручную</label>
+            <textarea id="sensorsFileArea" rows="6" class="placeholder-muted" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0; resize:vertical; margin-top:8px;" placeholder="Sensor10001&#10;10002&#10;..."></textarea>
+          </div>
+        </div>
+        <div class="table-meta" id="sensorsFileMeta" style="margin-top:6px;">Загрузите файл или вставьте список.</div>
+      </div>
+      <div id="sensorsDialogError" class="error-text" style="margin-top:6px; min-height:18px;"></div>
+      <div class="dlg-actions">
+        <button type="button" id="sensorsResetBtn" class="ghost" style="margin-right:auto;">Сбросить на все</button>
+        <button type="submit" value="cancel" id="sensorsCancelBtn" class="ghost">Отмена</button>
+        <button type="submit" value="ok" id="sensorsApplyBtn">Применить</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="/ui/chart.umd.min.js"></script>
   <script src="/ui/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="/ui/chartjs-plugin-zoom.min.js"></script>
@@ -455,6 +518,10 @@
         speed: document.getElementById('speed'),
         window: document.getElementById('window'),
         saveToSM: document.getElementById('saveToSM'),
+      },
+      working: {
+        btn: document.getElementById('workingLoadBtn'),
+        meta: document.getElementById('workingMeta'),
       },
       tabs: document.querySelectorAll('[data-tab]'),
       panels: {
@@ -528,6 +595,21 @@
         smooth: document.getElementById('chartSmooth'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
+      sensorsDialog: document.getElementById('sensorsDialog'),
+      sensorsDialogTabs: document.querySelectorAll('[data-sensortab]'),
+      sensorsPanelExisting: document.getElementById('sensorsPanelExisting'),
+      sensorsPanelFile: document.getElementById('sensorsPanelFile'),
+      sensorsFilter: document.getElementById('sensorsFilter'),
+      sensorsSelectAll: document.getElementById('sensorsSelectAll'),
+      sensorsDialogBody: document.getElementById('sensorsDialogBody'),
+      sensorsDialogMeta: document.getElementById('sensorsDialogMeta'),
+      sensorsFileInput: document.getElementById('sensorsFileInput'),
+      sensorsFileArea: document.getElementById('sensorsFileArea'),
+      sensorsFileMeta: document.getElementById('sensorsFileMeta'),
+      sensorsDialogError: document.getElementById('sensorsDialogError'),
+      sensorsResetBtn: document.getElementById('sensorsResetBtn'),
+      sensorsApplyBtn: document.getElementById('sensorsApplyBtn'),
+      sensorsCancelBtn: document.getElementById('sensorsCancelBtn'),
     };
     const inputs = els.inputs;
     // Стартовые значения: блокируем плеер до загрузки диапазона.
@@ -562,6 +644,10 @@
       saveDirty: false,
       diagEnabled: false,
       rangePicked: false,
+      workingSensors: [],
+      workingSet: new Set(),
+      workingDefault: true,
+      workingReady: false,
     };
 
     syncSaveToggle();
@@ -577,6 +663,7 @@
       if (!state.ws) {
         connectWS();
       }
+      loadWorkingSensors().catch(() => {});
     });
 
     window.__setTestIndicator = (active, text = 'Идёт тестирование…') => {
@@ -595,6 +682,13 @@
     lastTs: '-',
     precision: 3,
     selected: new Set(),
+  };
+  const workingPicker = {
+    tab: 'existing',
+    filter: '',
+    selected: new Set(),
+    fileText: '',
+    fileParsed: { valid: [], rejected: [] },
   };
     const chartState = {
       selected: [],
@@ -641,6 +735,132 @@
   function isAnalogSensor(id) {
     const t = getSensorType(id);
     return isAnalogIO(t);
+  }
+
+  function allSensorIds() {
+    return Array.from(sensorIndex.byId.keys()).sort((a, b) => a - b);
+  }
+
+  function dedupeIds(list) {
+    const set = new Set();
+    list.forEach((n) => {
+      const id = Number(n);
+      if (Number.isFinite(id)) set.add(id);
+    });
+    return Array.from(set).sort((a, b) => a - b);
+  }
+
+  function isWorkingSensor(id) {
+    if (!state.workingReady) return true;
+    if (!state.workingSensors.length) return false;
+    if (state.workingSet && state.workingSet.size) {
+      return state.workingSet.has(id);
+    }
+    return state.workingSensors.includes(id);
+  }
+
+  function setWorkingLocal(ids, isDefault = false) {
+    const uniq = dedupeIds(ids || []);
+    state.workingSensors = uniq;
+    state.workingSet = new Set(uniq);
+    state.workingDefault = !!isDefault;
+    state.workingReady = true;
+    updateWorkingMeta();
+    if (els.sensorsDialog && !els.sensorsDialog.open) {
+      workingPicker.selected = new Set(uniq);
+    }
+    updateControls();
+  }
+
+  function updateWorkingMeta() {
+    if (!els.working?.meta) return;
+    if (!state.workingReady) {
+      els.working.meta.textContent = 'Рабочий список: загружаем...';
+      els.working.meta.style.color = '#94a3b8';
+      return;
+    }
+    const total = sensorIndex.byId.size || state.workingSensors.length;
+    const count = state.workingSensors.length;
+    if (!state.workingSensors.length) {
+      els.working.meta.textContent = 'Рабочий список датчиков: не выбран';
+      els.working.meta.style.color = '#fbbf24';
+      return;
+    }
+    if (state.workingDefault) {
+      els.working.meta.textContent = `Рабочий список датчиков: все (${total})`;
+      els.working.meta.style.color = '#94a3b8';
+      return;
+    }
+    els.working.meta.textContent = `Рабочий список датчиков: ${count}/${total}`;
+    els.working.meta.style.color = '#e5e7eb';
+  }
+
+  async function loadWorkingSensors() {
+    if (state.workingLoading) return;
+    state.workingLoading = true;
+    try {
+      const data = await requestJSON('GET', '/api/v2/job/sensors');
+      const ids = (data?.sensors || []).map(Number).filter(Number.isFinite);
+      const isDefault = !!data?.default;
+      setWorkingLocal(ids.length ? ids : allSensorIds(), isDefault || !ids.length);
+      pushDiag(`[working] loaded count=${ids.length} default=${isDefault ? 'yes' : 'no'}`);
+    } catch (err) {
+      pushDiag(`[working] load failed: ${err.message}`);
+      // Фолбэк: используем полный список, если он уже загружен.
+      if (sensorIndex.byId.size) {
+        setWorkingLocal(allSensorIds(), true);
+      } else {
+        state.workingReady = true;
+        state.workingSensors = [];
+        state.workingSet = new Set();
+        updateWorkingMeta();
+      }
+    } finally {
+      state.workingLoading = false;
+    }
+  }
+
+  async function applyWorkingSensors(ids, opts = {}) {
+    const uniq = dedupeIds(ids);
+    if (!uniq.length) {
+      throw new Error('Нет валидных датчиков');
+    }
+    pushDiag(`[working] apply ids=${uniq.length}`);
+    const data = await requestJSON('POST', '/api/v2/job/sensors', { sensors: uniq });
+    const accepted = (data?.sensors || uniq).map(Number).filter(Number.isFinite);
+    const isDefault = !!data?.default;
+    setWorkingLocal(accepted, isDefault);
+    const rejected = (data?.rejected || []).length;
+    if (rejected) {
+      log(`Некоторые датчики отсутствуют (${rejected} шт.), они пропущены`, 'warn');
+      setSensorsDialogError(`Пропущено: ${rejected} (нет в справочнике)`);
+    }
+    if (opts?.toast) {
+      log(`Рабочий список обновлён: ${accepted.length} шт.`, true);
+    }
+    workingPicker.selected = new Set(accepted);
+  }
+
+  function parseSensorList(text) {
+    const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+    const valid = [];
+    const rejected = [];
+    const byName = sensorIndex.byName;
+    lines.forEach((line) => {
+      if (!line) return;
+      const num = Number(line);
+      if (Number.isFinite(num) && sensorIndex.byId.has(num)) {
+        valid.push(num);
+        return;
+      }
+      const id = byName.get(line.toLowerCase());
+      if (id !== undefined) {
+        valid.push(id);
+        return;
+      }
+      rejected.push(line);
+    });
+    return { valid: dedupeIds(valid), rejected };
   }
 
   let chartValuePrecision = 3;
@@ -776,6 +996,7 @@
           state.wsBytes = [];
           updateWsChip();
           log('WS: connected');
+          loadWorkingSensors().catch(() => {});
         };
         ws.onclose = () => {
           state.ws = null;
@@ -923,11 +1144,14 @@
       scheduleRenderTable(true);
     }
 
-    function getFilteredTableRows(applySelected = true) {
-      const filter = (tableState.filter || '').trim();
-      const useMeta = !!filter;
-      const baseRows = useMeta
-        ? Array.from(tableState.meta.entries()).map(([id, meta]) => {
+  function getFilteredTableRows(applySelected = true) {
+    const filter = (tableState.filter || '').trim();
+    const useMeta = !!filter;
+    const workingOn = state.workingReady && state.workingSensors.length > 0;
+    const inWorking = (id) => !workingOn || isWorkingSensor(id);
+    const baseRows = useMeta
+      ? Array.from(tableState.meta.entries()).map(([id, meta]) => {
+            if (!inWorking(id)) return null;
             const row = tableState.rows.get(id) || {};
             const hasValue = !!row.hasValue;
             return {
@@ -940,13 +1164,13 @@
               ts: row.ts,
               changedAt: row.changedAt,
             };
-          })
-        : Array.from(tableState.rows.values());
-      let filtered = filter
-        ? baseRows.filter(r => {
-            const name = (r.name || '').toLowerCase();
-            const textname = (r.textname || '').toLowerCase();
-            return name.includes(filter) || textname.includes(filter);
+          }).filter(Boolean)
+        : Array.from(tableState.rows.values()).filter(r => inWorking(r.id));
+    let filtered = filter
+      ? baseRows.filter(r => {
+          const name = (r.name || '').toLowerCase();
+          const textname = (r.textname || '').toLowerCase();
+          return name.includes(filter) || textname.includes(filter);
           })
         : baseRows;
       const applySelection = applySelected && tableState.selected.size > 0 && !filter;
@@ -960,9 +1184,9 @@
       return filtered;
     }
 
-    function renderTable(force) {
-      if (!els.table.body) return;
-      const filtered = getFilteredTableRows(true);
+  function renderTable(force) {
+    if (!els.table.body) return;
+    const filtered = getFilteredTableRows(true);
       const now = Date.now();
       const html = filtered.map(r => {
         const isChanged = r.changedAt && now - r.changedAt < 4000;
@@ -1001,6 +1225,140 @@
         els.table.selectAll.indeterminate = tableState.selected.size > 0 && !allSelected;
       }
     }
+
+  function setSensorsDialogError(msg) {
+    if (!els.sensorsDialogError) return;
+    els.sensorsDialogError.textContent = msg || '';
+    if (msg) {
+      els.sensorsDialogError.style.color = '#fbbf24';
+    } else {
+      els.sensorsDialogError.style.color = '#f87171';
+    }
+  }
+
+  function setSensorsTab(tab) {
+    workingPicker.tab = tab;
+    if (!els.sensorsDialogTabs) return;
+    els.sensorsDialogTabs.forEach(btn => btn.classList.toggle('active', btn.dataset.sensortab === tab));
+    if (els.sensorsPanelExisting) els.sensorsPanelExisting.classList.toggle('active', tab === 'existing');
+    if (els.sensorsPanelFile) els.sensorsPanelFile.classList.toggle('active', tab === 'file');
+    setSensorsDialogError('');
+    if (tab === 'existing') renderSensorsDialogTable();
+    if (tab === 'file') updateSensorsFileMeta();
+  }
+
+  function renderSensorsDialogTable() {
+    if (!els.sensorsDialogBody) return;
+    const filter = (workingPicker.filter || '').trim().toLowerCase();
+    const rows = [];
+    sensorIndex.byId.forEach((meta, id) => {
+      const name = meta.name || `${id}`;
+      const text = meta.textname || '';
+      const type = (meta.iotype || '').toUpperCase();
+      if (filter && !name.toLowerCase().includes(filter) && !text.toLowerCase().includes(filter)) return;
+      rows.push({ id, name, text, type });
+    });
+    rows.sort((a, b) => {
+      if (a.name === b.name) return a.id - b.id;
+      return a.name.localeCompare(b.name);
+    });
+    const html = rows.map(r => {
+      const checked = workingPicker.selected.has(r.id) ? 'checked' : '';
+      return `<tr>
+        <td style="text-align:center;"><input type="checkbox" class="dlg-select" data-sensor="${r.id}" ${checked}></td>
+        <td>${r.name}</td>
+        <td>${r.text || ''}</td>
+        <td style="text-align:center;">${r.type || ''}</td>
+      </tr>`;
+    }).join('');
+    els.sensorsDialogBody.innerHTML = html || `<tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:10px;">Нет датчиков</td></tr>`;
+    if (els.sensorsDialogMeta) {
+      const total = sensorIndex.byId.size;
+      const filtered = rows.length;
+      const sel = workingPicker.selected.size;
+      els.sensorsDialogMeta.textContent = `Выбрано: ${sel} · Отфильтровано: ${filtered}/${total}`;
+    }
+    if (els.sensorsSelectAll) {
+      const allSelected = rows.length > 0 && rows.every(r => workingPicker.selected.has(r.id));
+      els.sensorsSelectAll.checked = allSelected && workingPicker.selected.size > 0;
+      els.sensorsSelectAll.indeterminate = workingPicker.selected.size > 0 && !allSelected;
+    }
+  }
+
+  function updateSensorsFileMeta() {
+    if (!els.sensorsFileMeta) return;
+    const parsed = parseSensorList(workingPicker.fileText || '');
+    workingPicker.fileParsed = parsed;
+    if (!workingPicker.fileText.trim()) {
+      els.sensorsFileMeta.textContent = 'Загрузите файл или вставьте список.';
+      return;
+    }
+    const totalLines = (workingPicker.fileText || '').split(/\r?\n/).filter(Boolean).length;
+    const warn = parsed.rejected.length ? `; отклонено: ${parsed.rejected.length}` : '';
+    els.sensorsFileMeta.textContent = `Строк: ${totalLines}; валидных: ${parsed.valid.length}${warn}`;
+  }
+
+  function syncPickerSelectionFromWorking() {
+    workingPicker.selected = new Set(state.workingSensors || []);
+    renderSensorsDialogTable();
+  }
+
+  function openSensorsDialog() {
+    setSensorsDialogError('');
+    workingPicker.filter = '';
+    if (els.sensorsFilter) els.sensorsFilter.value = '';
+    syncPickerSelectionFromWorking();
+    if (state.workingDefault) {
+      workingPicker.selected.clear();
+      renderSensorsDialogTable();
+    }
+    setSensorsTab('existing');
+    if (els.sensorsFileArea) {
+      els.sensorsFileArea.value = '';
+      workingPicker.fileText = '';
+      updateSensorsFileMeta();
+    }
+    if (els.sensorsDialog) {
+      els.sensorsDialog.showModal();
+    }
+  }
+
+  async function applySensorsDialog(activeTab) {
+    setSensorsDialogError('');
+    if (activeTab === 'file') {
+      updateSensorsFileMeta();
+      const parsed = workingPicker.fileParsed || parseSensorList(workingPicker.fileText || '');
+      if (!parsed.valid.length) {
+        setSensorsDialogError(parsed.rejected.length ? 'Ни одного валидного датчика в списке' : 'Список пуст');
+        return;
+      }
+      try {
+        await applyWorkingSensors(parsed.valid, { toast: true });
+        if (parsed.rejected.length) {
+          log(`Пропущено ${parsed.rejected.length} строк: нет таких датчиков`, 'warn');
+        }
+        if (els.sensorsDialog) els.sensorsDialog.close();
+      } catch (err) {
+        setSensorsDialogError(err.message);
+      }
+      return;
+    }
+    // existing
+    const ids = Array.from(document.querySelectorAll('input.dlg-select:checked'))
+      .map((n) => Number(n.getAttribute('data-sensor')))
+      .filter(Number.isFinite);
+    if (!ids.length) {
+      setSensorsDialogError('Нужно выбрать хотя бы один датчик');
+      return;
+    }
+    try {
+      await applyWorkingSensors(ids, { toast: true });
+      if (els.sensorsDialog) els.sensorsDialog.close();
+    } catch (err) {
+      setSensorsDialogError(err.message);
+      return;
+    }
+  }
 
     const chartColors = ['#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#a78bfa', '#f87171', '#4ade80', '#60a5fa'];
 
@@ -1194,34 +1552,36 @@
       }
     }
 
-    function refreshChartSuggestions() {
-      const opts = [];
-      const usedValues = new Set();
-      sensorIndex.byId.forEach((meta, id) => {
-        if (chartState.selected.includes(id)) return; // уже на графике
-        const label = meta?.name ? `${meta.name}` : `${id}`;
-        const val = meta?.name || `${id}`;
-        if (!val || usedValues.has(val)) return;
-        usedValues.add(val);
+  function refreshChartSuggestions() {
+    const opts = [];
+    const usedValues = new Set();
+    sensorIndex.byId.forEach((meta, id) => {
+        if (!isWorkingSensor(id)) return;
+      if (chartState.selected.includes(id)) return; // уже на графике
+      const label = meta?.name ? `${meta.name}` : `${id}`;
+      const val = meta?.name || `${id}`;
+      if (!val || usedValues.has(val)) return;
+      usedValues.add(val);
         opts.push({ value: val, label: `${label} (${id})` });
       });
       renderChartSuggestions(els.charts.sensors?.value || '');
       updateChartInputState();
     }
 
-    function renderChartSuggestions(query) {
-      if (!els.charts.suggestBox) return;
-      const q = (query || '').trim().toLowerCase();
-      const sameQuery = q === (chartState.suggest.lastQuery || '');
-      if (chartState.suggest.locked && sameQuery && els.charts.suggestBox.style.display === 'block') {
+  function renderChartSuggestions(query) {
+    if (!els.charts.suggestBox) return;
+    const q = (query || '').trim().toLowerCase();
+    const sameQuery = q === (chartState.suggest.lastQuery || '');
+    if (chartState.suggest.locked && sameQuery && els.charts.suggestBox.style.display === 'block') {
         updateChartInputState();
         return; // не сбрасываем выделение, пока пользователь навигирует по списку
       }
       chartState.suggest.lastQuery = q;
       chartState.suggest.locked = false;
-      const items = [];
-      let availableCount = 0;
-      sensorIndex.byId.forEach((meta, id) => {
+    const items = [];
+    let availableCount = 0;
+    sensorIndex.byId.forEach((meta, id) => {
+        if (!isWorkingSensor(id)) return;
         if (chartState.selected.includes(id)) return;
         const name = meta?.name || `${id}`;
         const text = name.toLowerCase();
@@ -1231,7 +1591,7 @@
       });
       items.sort((a, b) => a.name.localeCompare(b.name));
       const limited = items.slice(0, 50);
-      if (!limited.length || q.length === 0) {
+      if (!limited.length) {
         els.charts.suggestBox.style.display = 'none';
         els.charts.suggestBox.innerHTML = '';
         updateChartInputState(availableCount);
@@ -2133,37 +2493,39 @@
       const pending = state.model.pending || state.model.Pending || {};
       const range = getEffectiveRange(params, pending);
       const pendingRange = !!(pending?.range_set || pending?.RangeSet);
-      const active = st === 'running' || st === 'paused' || st === 'stopping';
+      const hasWorking = state.workingReady && state.workingSensors.length > 0;
+      const active = hasWorking && (st === 'running' || st === 'paused' || st === 'stopping');
       const paused = st === 'paused';
       const curTs = currentTsFromServer();
       const atStart = !range.valid || !curTs || curTs.getTime() <= range.from.getTime();
       const atEnd = !range.valid || !curTs || curTs.getTime() >= range.to.getTime();
-      const canStep = range.valid && st !== 'failed' && st !== 'running' && st !== 'stopping';
+      const canStep = hasWorking && range.valid && st !== 'failed' && st !== 'running' && st !== 'stopping';
       const runningLike = st === 'running' || st === 'stopping';
 
       setDisabled(els.controls.stepBack, !canStep || atStart);
       setDisabled(els.controls.stepFwd, !canStep || atEnd);
       setDisabled(els.controls.stop, !active);
       const hasRange = range.valid && (active || pendingRange || state.rangePicked); // диапазон считаем заданным если активен, есть pending или пользователь выбрал его в этой сессии
-      setDisabled(els.controls.playPause, st === 'failed' || !hasRange);
+      setDisabled(els.controls.playPause, st === 'failed' || !hasRange || !hasWorking);
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
       els.controls.playPause.classList.remove('primary');
       // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
-      setDisabled(els.timeline, !range.valid);
+      setDisabled(els.timeline, !range.valid || !hasWorking);
       if (els.rangeBtn) {
         setDisabled(els.rangeBtn, active); // не трогаем диапазон во время активной задачи
       }
       if (els.controls.jumpStart) {
-        setDisabled(els.controls.jumpStart, !range.valid || st === 'running' || st === 'stopping');
+        setDisabled(els.controls.jumpStart, !hasWorking || !range.valid || st === 'running' || st === 'stopping');
       }
       if (els.controls.jumpEnd) {
-        setDisabled(els.controls.jumpEnd, !range.valid || st === 'running' || st === 'stopping');
+        setDisabled(els.controls.jumpEnd, !hasWorking || !range.valid || st === 'running' || st === 'stopping');
       }
       if (els.inputs.saveToSM) {
         const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
         setDisabled(els.inputs.saveToSM, runningLike || !allowed);
       }
+      updateWorkingMeta();
     }
 
     function setDisabled(el, disabled) {
@@ -2184,7 +2546,7 @@
         els.rangeLabelValue.textContent = label;
         els.rangeLabelValue.style.color = valid ? '#e5e7eb' : '#fbbf24';
       } else {
-        els.rangePicker.textContent = `Диапазон: ${label}`;
+        els.rangePicker.textContent = `${label}`;
       }
     }
 
@@ -2224,6 +2586,9 @@
     if (!sensorIndex.hydrated) {
       await preloadSensors();
     }
+    if (!state.workingReady) {
+      await loadWorkingSensors().catch(() => {});
+    }
     const url = '/api/v2/job';
       logUI(`refresh ${full ? 'full' : 'state'} start last_ts=${state.model.last_ts || state.model.LastTS}`);
       const data = await requestJSON('GET', url);
@@ -2261,6 +2626,10 @@
         await preloadSensors().catch(() => {});
       }
     const payload = validateStartForm();
+    if (!state.workingReady || !state.workingSensors.length) {
+      log('Рабочий список датчиков не выбран', false);
+      return;
+    }
     if (!payload) return;
     if (rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit) {
       log(`В диапазоне ${rangeSensorCount} датчиков, автодобавление в графики отключено (лимит ${chartAutoAddLimit})`, true);
@@ -2329,6 +2698,98 @@
           tableState.precision = tableValuePrecision;
           renderTable(true);
         });
+      }
+      if (els.working?.btn) {
+        els.working.btn.addEventListener('click', () => {
+          if (!sensorIndex.hydrated) {
+            preloadSensors().finally(openSensorsDialog);
+          } else {
+            openSensorsDialog();
+          }
+        });
+      }
+      if (els.sensorsDialogTabs) {
+        els.sensorsDialogTabs.forEach(btn => {
+          btn.addEventListener('click', () => setSensorsTab(btn.dataset.sensortab || 'existing'));
+        });
+      }
+      if (els.sensorsFilter) {
+        els.sensorsFilter.addEventListener('input', (e) => {
+          workingPicker.filter = (e.target.value || '').toLowerCase();
+          renderSensorsDialogTable();
+        });
+      }
+      if (els.sensorsSelectAll) {
+        els.sensorsSelectAll.addEventListener('change', () => {
+          const filter = (workingPicker.filter || '').trim().toLowerCase();
+          const ids = [];
+          sensorIndex.byId.forEach((meta, id) => {
+            const name = meta.name || `${id}`;
+            const text = meta.textname || '';
+            if (filter && !name.toLowerCase().includes(filter) && !text.toLowerCase().includes(filter)) return;
+            ids.push(id);
+          });
+          if (els.sensorsSelectAll.checked) ids.forEach(id => workingPicker.selected.add(id));
+          else ids.forEach(id => workingPicker.selected.delete(id));
+          renderSensorsDialogTable();
+        });
+      }
+      if (els.sensorsDialogBody) {
+        els.sensorsDialogBody.addEventListener('change', (e) => {
+          const target = e.target;
+          if (!(target instanceof HTMLInputElement)) return;
+          if (!target.classList.contains('dlg-select')) return;
+          const id = Number(target.dataset.sensor);
+          if (!Number.isFinite(id)) return;
+          if (target.checked) workingPicker.selected.add(id);
+          else workingPicker.selected.delete(id);
+          renderSensorsDialogTable();
+        });
+      }
+      if (els.sensorsFileInput) {
+        els.sensorsFileInput.addEventListener('change', (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            workingPicker.fileText = String(ev.target?.result || '');
+            if (els.sensorsFileArea) els.sensorsFileArea.value = workingPicker.fileText;
+            updateSensorsFileMeta();
+          };
+          reader.readAsText(file);
+        });
+      }
+      if (els.sensorsFileArea) {
+        els.sensorsFileArea.addEventListener('input', (e) => {
+          workingPicker.fileText = e.target.value || '';
+          updateSensorsFileMeta();
+        });
+      }
+      if (els.sensorsResetBtn) {
+        els.sensorsResetBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          try {
+            await applyWorkingSensors(allSensorIds(), { toast: true });
+            if (els.sensorsDialog) els.sensorsDialog.close();
+          } catch (err) {
+            setSensorsDialogError(err.message);
+          }
+        });
+      }
+      if (els.sensorsApplyBtn) {
+        els.sensorsApplyBtn.addEventListener('click', async (e) => {
+          e.preventDefault();
+          await applySensorsDialog(workingPicker.tab || 'existing');
+        });
+      }
+      if (els.sensorsCancelBtn) {
+        els.sensorsCancelBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          if (els.sensorsDialog) els.sensorsDialog.close('cancel');
+        });
+      }
+      if (els.sensorsDialog) {
+        els.sensorsDialog.addEventListener('close', () => setSensorsDialogError(''));
       }
       if (els.table.body) {
         els.table.body.addEventListener('change', (e) => {
@@ -2841,14 +3302,19 @@
 
     bindActions();
     updateControls();
-    preloadSensors();
     initResizablePanels();
-    startPolling();
-    connectWS();
     scheduleRenderTable(true);
     updateChartMeta();
     updateRangeLabel();
     updateDiagButtons();
+    updateWorkingMeta();
+
+    (async () => {
+      await preloadSensors().catch(() => {});
+      await loadWorkingSensors().catch(() => {});
+      startPolling();
+      connectWS();
+    })();
 
     async function applyAvailableRange(intoDialog = false) {
       try {

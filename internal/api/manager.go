@@ -60,6 +60,8 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 	metaIDs := sensors
 	if cfg != nil && len(cfg.Sensors) > 0 {
 		metaIDs = allSensorIDs(cfg)
+		// По умолчанию рабочий список — полный словарь из конфига.
+		sensors = metaIDs
 	}
 	info := BuildSensorInfo(cfg, metaIDs)
 	m := &Manager{
@@ -314,6 +316,45 @@ func (m *Manager) Sensors() []SensorInfo {
 		return list[i].Name < list[j].Name
 	})
 	return list
+}
+
+// WorkingSensors возвращает копию текущего рабочего списка датчиков.
+func (m *Manager) WorkingSensors() []int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]int64, len(m.sensors))
+	copy(out, m.sensors)
+	return out
+}
+
+// SetWorkingSensors устанавливает текущий рабочий список датчиков.
+// Возвращает количество принятых и отклонённых id.
+func (m *Manager) SetWorkingSensors(ids []int64) (int, int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	seen := make(map[int64]struct{})
+	accepted := make([]int64, 0, len(ids))
+	rejected := 0
+	for _, id := range ids {
+		if _, ok := m.sensorInfo[id]; !ok {
+			rejected++
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		accepted = append(accepted, id)
+	}
+	if len(accepted) == 0 {
+		return 0, rejected, fmt.Errorf("no valid sensors")
+	}
+	m.sensors = accepted
+	if m.pending.rangeSet {
+		m.pending.rng.Sensors = append([]int64(nil), accepted...)
+	}
+	return len(accepted), rejected, nil
 }
 
 func allSensorIDs(cfg *config.Config) []int64 {

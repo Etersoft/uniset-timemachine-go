@@ -618,6 +618,31 @@
       hydrated: false,
     };
 
+  function getSensorMeta(id) {
+    return sensorIndex.byId.get(id) || tableState.meta.get(id) || {};
+  }
+  function getSensorType(id) {
+    const t = (getSensorMeta(id)?.iotype || '').toString().toUpperCase();
+    return t;
+  }
+  function isDiscreteIO(io) {
+    const t = (io || '').toString().toUpperCase();
+    return t === 'DI' || t === 'DO';
+  }
+  function isAnalogIO(io) {
+    const t = (io || '').toString().toUpperCase();
+    if (!t) return true;
+    return t === 'AI' || t === 'AO' || t === '';
+  }
+  function isDiscreteSensor(id) {
+    const t = getSensorType(id);
+    return isDiscreteIO(t);
+  }
+  function isAnalogSensor(id) {
+    const t = getSensorType(id);
+    return isAnalogIO(t);
+  }
+
   let chartValuePrecision = 3;
   let tableValuePrecision = 3;
   let tableRenderTimer = null;
@@ -730,7 +755,13 @@
         node.classList.toggle('active', name === tab);
       });
       if (tab === 'charts') {
-        setTimeout(() => rebuildChart(true), 0);
+        setTimeout(() => {
+          rebuildChart(true);
+          if (!chartState.chartStep) {
+            const hasRange = chartState.range.from && chartState.range.to;
+            rebuildStepChart(hasRange);
+          }
+        }, 0);
       }
     }
 
@@ -1072,6 +1103,7 @@
         const data = existing?.data ? existing.data.slice() : [];
         const lastValue = existing?.lastValue ?? null;
         const lastTs = existing?.lastTs ?? null;
+        const iotype = existing?.iotype || getSensorType(id);
         next.set(id, {
           id,
           label: chartLabelByID(id),
@@ -1079,6 +1111,7 @@
           data: data ? data.slice() : [],
           lastValue,
           lastTs,
+          iotype,
         });
       });
       chartState.datasets = next;
@@ -1242,7 +1275,9 @@
     }
 
     function buildChartDatasets() {
-      return Array.from(chartState.datasets.values()).map(ds => ({
+      return Array.from(chartState.datasets.values())
+        .filter(ds => isAnalogIO(ds.iotype) && isAnalogSensor(ds.id))
+        .map(ds => ({
         label: ds.label,
         data: ds.data,
         borderColor: ds.color || '#22d3ee',
@@ -1258,29 +1293,37 @@
 
     function getStepOffsets() {
       const offsets = new Map();
-      chartState.selected.forEach((id, idx) => offsets.set(id, idx));
+      const discrete = chartState.selected.filter(isDiscreteSensor);
+      discrete.forEach((id, idx) => offsets.set(id, idx));
       return offsets;
     }
 
     function buildStepDatasets() {
       const offsets = getStepOffsets();
-      return Array.from(chartState.datasets.values()).map(ds => ({
-        label: ds.label,
-        data: (ds.data || []).map(p => {
-          const step = toStepValue(p.y);
-          const offset = (offsets.get(ds.id) || 0) * 2;
-          return { x: p.x, y: step === null ? null : offset + step };
-        }),
-        borderColor: ds.color || '#22d3ee',
-        backgroundColor: 'transparent',
-        tension: 0,
-        stepped: true,
-        spanGaps: true,
-        pointRadius: 0,
-        borderWidth: 1,
-        fill: false,
-        hidden: chartState.focused !== null && chartState.focused !== ds.id,
-      }));
+      const used = new Set(Array.from(chartState.datasets.values()).map(ds => (ds.color || '').toLowerCase()).filter(Boolean));
+      const discreteIds = chartState.selected.filter(isDiscreteSensor);
+      return discreteIds.map((id, idx) => {
+        const ds = chartState.datasets.get(id) || {};
+        const color = ds.color || pickChartColor(id, used, idx) || '#22d3ee';
+        if (color) used.add(color.toLowerCase());
+        return {
+          label: ds.label || chartLabelByID(id),
+          data: (ds.data || []).map(p => {
+            const step = toStepValue(p.y);
+            const offset = (offsets.get(id) || 0) * 2;
+            return { x: p.x, y: step === null ? null : offset + step };
+          }),
+          borderColor: color,
+          backgroundColor: 'transparent',
+          tension: 0,
+          stepped: true,
+          spanGaps: true,
+          pointRadius: 0,
+          borderWidth: 1,
+          fill: false,
+          hidden: chartState.focused !== null && chartState.focused !== id,
+        };
+      });
     }
 
     function hexToRGBA(hex, alpha) {
@@ -1318,7 +1361,7 @@
         chartState.chartStep.data.datasets = buildStepDatasets();
         chartState.chartStep.options.scales.x.min = hasRange ? chartState.range.from : undefined;
         chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
-        const tracks = Math.max(chartState.selected.length, 1);
+        const tracks = Math.max(chartState.selected.filter(isDiscreteSensor).length, 1);
         chartState.chartStep.options.scales.y.min = 0;
         chartState.chartStep.options.scales.y.max = tracks * 2;
         chartState.chartStep.update('none');
@@ -1344,7 +1387,7 @@
       els.charts.stepCanvas.height = height;
       const labels = extractChartLabels();
       const datasets = buildStepDatasets();
-      const tracks = Math.max(chartState.selected.length, 1);
+      const tracks = Math.max(chartState.selected.filter(isDiscreteSensor).length, 1);
       chartState.chartStep = new Chart(ctx, {
         type: 'line',
         data: { labels, datasets },
@@ -1788,12 +1831,15 @@
 
     function syncChartWithParams(params) {
       const sig = paramsSignature(params);
+      const sensors = params?.Sensors || params?.sensors;
+      const hasSensors = Array.isArray(sensors) && sensors.length;
+      // Не затираем ручной выбор, если сервер не передал Sensors.
+      if (!hasSensors && chartState.selected.length) return;
       if (sig && sig !== chartState.lastParamsSig) {
         chartState.lastParamsSig = sig;
-        const sensors = params?.Sensors || params?.sensors;
-        if (Array.isArray(sensors) && sensors.length && canAutoAddSensors(sensors)) {
+        if (hasSensors && canAutoAddSensors(sensors)) {
           applyChartSensors(sensors);
-        } else {
+        } else if (!chartState.selected.length) {
           clearChart();
         }
       }
@@ -1875,6 +1921,9 @@
         sensorIndex.hydrated = list.length > 0;
         pushDiag(`[sensors] loaded count=${list.length}`);
         renderChartSuggestions(els.charts.sensors?.value || '');
+        if (chartState.selected.length) {
+          rebuildChart(true);
+        }
       } catch (err) {
         logUI(`[chart] preload sensors failed: ${err.message}`);
         pushDiag(`[sensors] preload failed: ${err.message}`);
@@ -2299,8 +2348,13 @@
           if (!btn) return;
           const id = Number(btn.dataset.chartAdd);
           if (!Number.isFinite(id)) return;
-          const next = Array.from(new Set([...chartState.selected, id]));
-          applyChartSensors(next);
+          (async () => {
+            if (!sensorIndex.hydrated) {
+              try { await preloadSensors(); } catch (_) { /* ignore */ }
+            }
+            const next = Array.from(new Set([...chartState.selected, id]));
+            applyChartSensors(next);
+          })();
         });
       }
       document.addEventListener('keydown', (e) => {

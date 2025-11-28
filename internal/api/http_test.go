@@ -199,6 +199,47 @@ func TestSensorsEndpoint(t *testing.T) {
 	}
 }
 
+func TestJobSensorsEndpoints(t *testing.T) {
+	ts, mgr := newTestServer(t)
+	defer ts.Close()
+
+	var getBody map[string]any
+	getJSON(t, ts.URL+"/api/v2/job/sensors", &getBody)
+	if count, ok := getBody["count"].(float64); !ok || int(count) != 2 {
+		t.Fatalf("get job sensors count=%v, want 2", getBody["count"])
+	}
+	if def, ok := getBody["default"].(bool); !ok || !def {
+		t.Fatalf("default flag unexpected: %v", getBody["default"])
+	}
+
+	// Set subset with one valid, one invalid.
+	resp := postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []int64{1, 99}})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("set job sensors status=%d body=%s", resp.StatusCode, string(b))
+	}
+	working := mgr.WorkingSensors()
+	if len(working) != 1 || working[0] != 1 {
+		t.Fatalf("working sensors after set=%v, want [1]", working)
+	}
+
+	getBody = map[string]any{}
+	getJSON(t, ts.URL+"/api/v2/job/sensors", &getBody)
+	if count, ok := getBody["count"].(float64); !ok || int(count) != 1 {
+		t.Fatalf("after set count=%v, want 1", getBody["count"])
+	}
+	if def, ok := getBody["default"].(bool); ok && def {
+		t.Fatalf("default flag should be false after custom set")
+	}
+
+	// Invalid only -> expect 400
+	resp = postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []int64{99}})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("set invalid sensors status=%d, want 400", resp.StatusCode)
+	}
+}
+
 func TestJobGetState(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()

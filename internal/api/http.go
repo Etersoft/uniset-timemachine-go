@@ -94,6 +94,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		handler http.Handler
 	}{
 		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
+		{"/api/v2/job/sensors", http.HandlerFunc(s.handleJobSensors)},
 		{"/api/v2/job/sensors/count", http.HandlerFunc(s.handleSensorCount)},
 		{"/api/v2/job", http.HandlerFunc(s.handleJobV2)},
 		{"/api/v2/job/range", http.HandlerFunc(s.handleSetRange)},
@@ -186,6 +187,48 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 		"sensors": list,
 		"count":   len(list),
 	})
+}
+
+type jobSensorsRequest struct {
+	Sensors []int64 `json:"sensors"`
+}
+
+// handleJobSensors управляет текущим рабочим списком датчиков.
+func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		current := s.manager.WorkingSensors()
+		all := s.manager.Sensors()
+		defaultSet := len(current) == len(all)
+		writeJSON(w, http.StatusOK, map[string]any{
+			"sensors": current,
+			"count":   len(current),
+			"default": defaultSet,
+		})
+	case http.MethodPost:
+		var req jobSensorsRequest
+		if err := decodeJSON(r, &req); err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if len(req.Sensors) == 0 {
+			writeError(w, http.StatusBadRequest, fmt.Errorf("no sensors provided"))
+			return
+		}
+		accepted, rejected, err := s.manager.SetWorkingSensors(req.Sensors)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":   "ok",
+			"accepted": accepted,
+			"rejected": rejected,
+			"count":    accepted,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 // handleSetRange сохраняет параметры диапазона без старта задачи.

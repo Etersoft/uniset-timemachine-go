@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('ws indicator switches to warn on disconnect', async ({ page, context }) => {
+  await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
@@ -26,14 +27,12 @@ test('ws indicator switches to warn on disconnect', async ({ page, context }) =>
   await page.request.post('/api/v2/job/range', {
     data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
   });
-  await page.waitForFunction(() => {
-    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
-    return !!el && !el.disabled;
-  }, { timeout: 15_000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#playPauseBtn')).toBeEnabled({ timeout: 5_000 });
 
   const wsChip = page.locator('#wsSpeedChip');
   await page.click('#playPauseBtn');
-  await expect(wsChip).toHaveClass(/ok/, { timeout: 15_000 });
+  await expect(wsChip).toHaveClass(/ok/, { timeout: 8_000 });
 
   // Имитация обрыва сети/WS.
   await context.setOffline(true);

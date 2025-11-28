@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('step / speed / cache / save-to-sm controls are applied on start', async ({ page }) => {
+  await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
   const statusBadge = page.locator('#statusBadge');
@@ -26,10 +27,8 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
     window: '5s',
   };
   await page.request.post('/api/v2/job/range', { data: rangePayload });
-  await page.waitForFunction(() => {
-    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
-    return !!el && !el.disabled;
-  }, { timeout: 15_000 });
+  await page.waitForTimeout(1500);
+  await expect(playBtn).toBeEnabled({ timeout: 5_000 });
 
   // Проставляем диапазон и параметры.
   const setValue = async (selector: string, value: string) => {
@@ -60,7 +59,7 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   }
 
   await playBtn.click();
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
+  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
   await page.waitForTimeout(300);
 
   const afterJobResp = await page.request.get('/api/v2/job');

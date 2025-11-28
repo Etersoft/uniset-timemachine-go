@@ -18,9 +18,9 @@ test('range → play → stop', async ({ page }) => {
 
   const statusBadge = page.locator('#statusBadge');
   await page.request.post('/api/v2/job/start', { data: {} });
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
+  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
 
   // Стоп
   await page.request.post('/api/v2/job/stop', { data: {} });
-  await expect(statusBadge).toHaveText(/paused|idle|done|stopping|running/i, { timeout: 15_000 });
+  await expect(statusBadge).toHaveText(/paused|idle|done|stopping|running/i, { timeout: 8_000 });
 });

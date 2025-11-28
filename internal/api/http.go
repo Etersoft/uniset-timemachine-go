@@ -107,6 +107,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		{"/api/v2/job/step/backward", http.HandlerFunc(s.handleStepBackward)},
 		{"/api/v2/snapshot", http.HandlerFunc(s.handleSnapshot)},
 		{"/api/v2/ws/state", http.HandlerFunc(s.handleWSState)},
+		{"/api/v2/job/reset", http.HandlerFunc(s.handleReset)},
 	}
 	for _, route := range apiRoutes {
 		s.mux.Handle(route.path, s.withCORS(route.handler))
@@ -177,12 +178,13 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	var list []SensorInfo
-	if s.streamer != nil {
+	list := s.manager.Sensors()
+	if len(list) == 0 && s.streamer != nil {
 		list = s.streamer.ListSensors()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"sensors": list,
+		"count":   len(list),
 	})
 }
 
@@ -455,6 +457,20 @@ func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	}
+}
+
+func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	logDebugf("[http] reset requested")
+	clone := s.manager.SensorsInfo()
+	s.manager.Reset()
+	if s.streamer != nil {
+		s.streamer.Reset(clone)
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) wrapSimpleWithLog(label string, fn func() error) http.HandlerFunc {

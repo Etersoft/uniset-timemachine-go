@@ -11,6 +11,7 @@ import (
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
 	"github.com/pv/uniset-timemachine-go/pkg/config"
+	"sort"
 )
 
 // Manager отвечает за одну задачу воспроизведения и её управление.
@@ -56,8 +57,12 @@ type job struct {
 
 // NewManager создаёт менеджер с заданным сервисом и списком датчиков.
 func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer, saveAllowed bool, defaultSave bool) *Manager {
-	info := BuildSensorInfo(cfg, sensors)
-	return &Manager{
+	metaIDs := sensors
+	if cfg != nil && len(cfg.Sensors) > 0 {
+		metaIDs = allSensorIDs(cfg)
+	}
+	info := BuildSensorInfo(cfg, metaIDs)
+	m := &Manager{
 		service: service,
 		sensors: sensors,
 		defaults: defaults{
@@ -70,6 +75,41 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 		streamer:   streamer,
 		sensorInfo: info,
 	}
+	if m.streamer != nil {
+		m.streamer.Reset(info)
+	}
+	return m
+}
+
+// Reset сбрасывает состояние задачи и pending.
+func (m *Manager) Reset() {
+	m.mu.Lock()
+	if m.jobCancel != nil {
+		m.jobCancel()
+		m.jobCancel = nil
+	}
+	m.job = nil
+	m.pending = pendingState{}
+	// Обновляем streamer новым слепком сенсоров, чтобы клиенты получили reset.
+	if m.streamer != nil {
+		clone := make(map[int64]SensorInfo, len(m.sensorInfo))
+		for id, info := range m.sensorInfo {
+			clone[id] = info
+		}
+		m.streamer.Reset(clone)
+	}
+	m.mu.Unlock()
+}
+
+// SensorsInfo возвращает копию метаданных датчиков.
+func (m *Manager) SensorsInfo() map[int64]SensorInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	clone := make(map[int64]SensorInfo, len(m.sensorInfo))
+	for id, info := range m.sensorInfo {
+		clone[id] = info
+	}
+	return clone
 }
 
 // StartPending запускает задачу, используя отложенный диапазон.
@@ -257,6 +297,46 @@ func (m *Manager) SetSaveOutput(save bool) error {
 	m.job.params.SaveOutput = save
 	m.mu.Unlock()
 	return m.sendCommand(replay.Command{Type: replay.CommandSaveOutput, SaveOutput: save})
+}
+
+// Sensors возвращает метаданные всех известных датчиков (из конфига).
+func (m *Manager) Sensors() []SensorInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	list := make([]SensorInfo, 0, len(m.sensorInfo))
+	for _, info := range m.sensorInfo {
+		list = append(list, info)
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].Name == list[j].Name {
+			return list[i].ID < list[j].ID
+		}
+		return list[i].Name < list[j].Name
+	})
+	return list
+}
+
+func allSensorIDs(cfg *config.Config) []int64 {
+	if cfg == nil || len(cfg.Sensors) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(cfg.Sensors))
+	for _, id := range cfg.Sensors {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	// deduplicate
+	out := ids[:0]
+	var prev int64
+	first := true
+	for _, id := range ids {
+		if first || id != prev {
+			out = append(out, id)
+		}
+		prev = id
+		first = false
+	}
+	return out
 }
 
 // Stop останавливает задачу.
@@ -496,8 +576,8 @@ func (m *Manager) sendCommand(cmd replay.Command) error {
 		if isStep {
 			forward := cmd.Type == replay.CommandStepForward
 			handled := m.stepPendingLocked(forward)
-			m.mu.Unlock()
 			if handled {
+				m.mu.Unlock()
 				return nil
 			}
 		}

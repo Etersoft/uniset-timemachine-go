@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('front-end issues HTTP requests on load and start/stop', async ({ page }) => {
+  await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
@@ -20,7 +21,7 @@ test('front-end issues HTTP requests on load and start/stop', async ({ page }) =
   // Страница сама дергает /api/v2/job — проверим статус.
   await page.waitForResponse(
     (resp) => resp.url().endsWith('/api/v2/job') && resp.status() === 200,
-    { timeout: 15_000 },
+    { timeout: 8_000 },
   );
 
   // Готовим валидный диапазон.
@@ -33,10 +34,8 @@ test('front-end issues HTTP requests on load and start/stop', async ({ page }) =
   await page.request.post('/api/v2/job/range', {
     data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
   });
-  await page.waitForFunction(() => {
-    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
-    return !!el && !el.disabled;
-  }, { timeout: 15_000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#playPauseBtn')).toBeEnabled({ timeout: 5_000 });
 
   // Ждём, пока фронт отправит range и start.
   const rangeResponsePromise = page.waitForResponse(
@@ -52,7 +51,7 @@ test('front-end issues HTTP requests on load and start/stop', async ({ page }) =
   expect(startResponse.ok()).toBeTruthy();
 
   const statusBadge = page.locator('#statusBadge');
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
+  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
 
   const stopResponsePromise = page.waitForResponse(
     (resp) => resp.url().includes('/api/v2/job/stop') && resp.request().method() === 'POST',

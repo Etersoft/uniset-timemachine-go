@@ -353,13 +353,13 @@ func TestSensorsCountAndSnapshotErrors(t *testing.T) {
 func TestWSStateEndpoint(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()
-	// HTTP GET should fail (expect upgrade required / bad request).
+	// HTTP GET should fail (expect upgrade required / bad request / service unavailable if streamer is absent).
 	resp, err := http.Get(ts.URL + "/api/v2/ws/state")
 	if err != nil {
 		t.Fatalf("ws state GET: %v", err)
 	}
-	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUpgradeRequired {
-		t.Fatalf("ws state GET status = %d, want 400/426", resp.StatusCode)
+	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUpgradeRequired && resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("ws state GET status = %d, want 400/426/503", resp.StatusCode)
 	}
 	resp.Body.Close()
 }

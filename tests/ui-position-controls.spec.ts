@@ -61,5 +61,5 @@ test('position controls: seek via slider, jump start/end, current label', async 
 
   // Стартуем воспроизведение и убеждаемся, что статус меняется, currentLabel обновляется.
   await page.request.post('/api/v2/job/start', { data: {} });
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
+  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
 });

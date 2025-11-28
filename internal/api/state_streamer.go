@@ -25,6 +25,7 @@ type SensorInfo struct {
 	ID       int64  `json:"id"`
 	Name     string `json:"name"`
 	TextName string `json:"textname,omitempty"`
+	IOType   string `json:"iotype,omitempty"`
 }
 
 type sensorValue struct {
@@ -85,8 +86,13 @@ func NewStateStreamer(batchInterval time.Duration) *StateStreamer {
 
 // BuildSensorInfo подготавливает карту ID → SensorInfo из конфига.
 func BuildSensorInfo(cfg *config.Config, ids []int64) map[int64]SensorInfo {
+	seen := make(map[int64]struct{}, len(ids))
 	infos := make(map[int64]SensorInfo, len(ids))
 	for _, id := range ids {
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
 		var name string
 		var meta config.SensorMeta
 		if cfg != nil {
@@ -100,6 +106,7 @@ func BuildSensorInfo(cfg *config.Config, ids []int64) map[int64]SensorInfo {
 			ID:       id,
 			Name:     name,
 			TextName: meta.TextName,
+			IOType:   meta.IOType,
 		}
 	}
 	return infos

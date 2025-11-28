@@ -8,27 +8,30 @@
 - HTTP-клиент для SM умеет пул воркеров/ретраи/таймауты (см. `internal/sharedmem/http_client.go`), по умолчанию один поток.
 - Основной цикл проигрывания заранее буферизует окно изменений (например, 1–5 минут вперёд), чтобы успевать подготавливать значения даже при больших периодах и количестве датчиков (до ~100k).
 
-## HTTP API (MVP, однозадачное управление)
+## HTTP API (v2, однозадачное управление)
 
-- Режим запуска: `timemachine --http-addr :8080 ...`, все параметры БД/SM/таблиц задаются только при запуске сервиса (не через API).
-- Одна активная задача. Попытка старта, когда уже есть running/paused задача, возвращает `409`.
+- Режим запуска: `timemachine --http-addr :8080 ...`; БД/SM/таблицы задаются только при старте процесса.
+- Одна активная задача; повторный старт при `running/paused` → `409`.
 - Эндпоинты:
-  - `POST /api/v2/job/range` — подготовка диапазона без старта. Body: `from`, `to` (RFC3339), `step` (duration), `speed` (float, опционально), `window` (duration, опционально), `save_output` (bool).
-  - `GET /api/v2/job/range` — доступный диапазон и количество датчиков: `{"from","to","sensor_count"}`.
-  - `POST /api/v2/job/start` — старт ранее подготовленного диапазона. Опционально `save_output`.
-  - `POST /api/v2/job/pause` — переводит задачу в `paused`.
-  - `POST /api/v2/job/resume` — продолжает проигрывание с тем же шагом и скоростью.
-  - `POST /api/v2/job/step/forward` — когда `paused`, выполняет один шаг вперёд.
-  - `POST /api/v2/job/step/backward` — когда `paused`, перематывает на один шаг назад.
-  - `POST /api/v2/job/seek` — перематывает на указанный `ts` (RFC3339). При `apply:true` отправляет финальное состояние и остаётся в `paused`.
-  - `POST /api/v2/job/apply` — когда `paused` (после seek/step), отправляет текущее состояние в SM одним шагом и остаётся в `paused`.
-  - `POST /api/v2/job/stop` — мягко отменяет задачу и освобождает слот.
-  - `GET /api/v2/job` — статус: `status` (`idle|running|paused|stopping|done|failed`), `params`, `pending`, `started_at`, `finished_at`, `step_id`, `last_ts`, `updates_sent`, `error`, `save_allowed`.
-  - `POST /api/v2/snapshot` — одноразовый расчёт состояния на момент `ts` (RFC3339, опционально `slist`). Не влияет на текущую задачу и не пишет в SM.
   - `GET /healthz` — liveness.
-- Семантика шага назад: используем кеш снапшотов шагов (`stateCache`) и догонку событий; при промахе пересобираем состояние через `BuildState`, затем остаёмся в `paused`.
-- Пауза/степы реализуются через контрольный канал у `replay.Service`: блокируем ожидание следующего шага, пока не придёт `resume` или разовая команда `step`.
-- Шаг вперёд также выполняется только из `paused` и после выполнения оставляет задачу в `paused`; UI блокирует стрелки на границах диапазона.
+  - `GET /api/v2/sensors` — список всех датчиков из конфига (`id,name,textname,iotype`) и `count`.
+- `GET /api/v2/job` — текущее состояние: `status` (`idle|running|paused|stopping|done|failed`), `params`, `pending`, `started_at`, `finished_at`, `step_id`, `last_ts`, `updates_sent`, `error`, `save_allowed`, `save_output`.
+- `GET /api/v2/job/range` — доступный диапазон и количество датчиков в истории: `{"from","to","sensor_count"}`.
+- `POST /api/v2/job/range` — подготовка диапазона без старта. Body: `from`, `to` (RFC3339), `step` (duration), `speed` (float, опционально), `window` (duration, опционально), `save_output` (bool).
+- `POST /api/v2/job/start` — запуск ранее подготовленного диапазона. Опционально `save_output`.
+- `POST /api/v2/job/reset` — остановка активной задачи (если была), очистка pending range/seek и отправка события `reset` в WebSocket.
+- `POST /api/v2/job/pause` — перевод в `paused`.
+- `POST /api/v2/job/resume` — продолжение с теми же шагом/скоростью (использует pending seek, если был).
+- `POST /api/v2/job/stop` — мягкая остановка задачи.
+  - `POST /api/v2/job/seek` — перемотка на `ts` (RFC3339), `apply:false/true` оставляет в `paused`, при `apply:true` фиксирует состояние.
+- `POST /api/v2/job/apply` — отправить текущее состояние (после seek/step) в SM, остаётся в `paused`.
+- `POST /api/v2/job/step/forward` — один шаг вперёд (только из `paused`), остаётся `paused`.
+- `POST /api/v2/job/step/backward` — шаг назад с восстановлением состояния из кеша, остаётся `paused`.
+- `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне.
+- `POST /api/v2/snapshot` — одноразовый расчёт состояния на `ts` (RFC3339, опц. `slist`); не влияет на активную задачу и не пишет в SM.
+- `GET /api/v2/ws/state` — WebSocket со снапшотом и дальнейшими обновлениями: типы сообщений `snapshot|updates|reset`, поля `step_id`, `step_ts`, `step_unix`, `updates` или компактное `u` (`[id,value,has]`), плюс метаданные датчиков в снапшоте. Без upgrade вернёт `400/426`, без streamer — `503`.
+- Семантика шага назад: кеш снапшотов (`stateCache`) + догонка событий; при промахе пересборка через `BuildState`, после чего остаётся в `paused`.
+- Команды работают через контрольный канал `replay.Service`; `step`/`seek`/`apply` не запускают потоковое воспроизведение.
 
 ## Архитектура воспроизведения (рабочая версия)
 

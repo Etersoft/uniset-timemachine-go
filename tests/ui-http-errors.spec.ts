@@ -11,7 +11,7 @@ test('UI logs HTTP errors on refresh failure', async ({ page }) => {
   const logEntries = page.locator('#log .log-entry');
   await page.waitForFunction(
     () => Array.from(document.querySelectorAll('#log .log-entry')).some((el) => el.textContent?.includes('Init:')),
-    { timeout: 15_000 },
+    { timeout: 8_000 },
   );
   const texts = await logEntries.allTextContents();
   expect(texts.join(' ')).toContain('Init:');

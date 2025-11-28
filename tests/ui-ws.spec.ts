@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('websocket indicator and speed updates when playing', async ({ page }) => {
+  await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
@@ -26,24 +27,22 @@ test('websocket indicator and speed updates when playing', async ({ page }) => {
   await page.request.post('/api/v2/job/range', {
     data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
   });
-  await page.waitForFunction(() => {
-    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
-    return !!el && !el.disabled;
-  }, { timeout: 15_000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#playPauseBtn')).toBeEnabled({ timeout: 5_000 });
 
   const wsChip = page.locator('#wsSpeedChip');
   const statusBadge = page.locator('#statusBadge');
 
   // Запускаем, чтобы пошёл трафик.
   await page.click('#playPauseBtn');
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 15_000 });
+  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
 
   await page.waitForFunction(
     () => {
       const el = document.querySelector('#wsSpeedChip');
       return !!el && el.textContent !== null && !el.textContent.includes('—');
     },
-    { timeout: 15_000 },
+    { timeout: 8_000 },
   );
   await expect(wsChip).toHaveClass(/ok/);
 

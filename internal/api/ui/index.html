@@ -147,10 +147,10 @@
           <button class="tab" data-tab="charts">Графики</button>
         </div>
         <div class="player" style="display:flex; gap:8px; align-items:center; background:#0f172a; border:1px solid #1f2937; border-radius:14px; padding:6px 8px;">
-          <button id="stepBackBtn" class="ghost" aria-label="Шаг назад" title="Шаг назад" style="width:60px;">⏮</button>
-          <button id="playPauseBtn" class="play-btn" aria-label="Play/Pause" title="Play/Pause" style="width:88px;">▶️ Play</button>
-          <button id="stopBtn" class="ghost" aria-label="Stop" title="Stop" style="width:88px; font-size:15px;">■ Stop</button>
-          <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд" title="Шаг вперёд" style="width:60px;">⏭</button>
+          <button id="stepBackBtn" class="ghost" aria-label="Шаг назад" title="Шаг назад" style="width:60px;" disabled>⏮</button>
+          <button id="playPauseBtn" class="play-btn" aria-label="Play/Pause" title="Play/Pause" style="width:88px;" disabled>▶️ Play</button>
+          <button id="stopBtn" class="ghost" aria-label="Stop" title="Stop" style="width:88px; font-size:15px;" disabled>■ Stop</button>
+          <button id="stepFwdBtn" class="ghost" aria-label="Шаг вперёд" title="Шаг вперёд" style="width:60px;" disabled>⏭</button>
         </div>
         <div class="chips" style="justify-content:flex-end; display:flex; gap:10px; flex-wrap:wrap;">
           <span class="chip" id="wsSpeedChip">ws —</span>
@@ -220,7 +220,14 @@
     <div class="card">
       <div class="row center" style="justify-content:space-between; margin-bottom:8px;">
         <h3 style="margin:0; color:#f8fafc; font-size:16px;">Лог</h3>
-        <button class="ghost" id="clearLogBtn" style="padding:6px 10px; font-size:12px;">Очистить</button>
+        <div class="row center" style="gap:8px;">
+          <label class="checkbox-inline" style="color:#e5e7eb; font-size:12px;">
+            <input type="checkbox" id="diagEnable" style="margin-right:4px; width:auto;"> Диагностика
+          </label>
+          <button class="ghost" id="diagDownload" style="padding:6px 10px; font-size:12px;" disabled>Выгрузить</button>
+          <button class="ghost" id="diagClear" style="padding:6px 10px; font-size:12px;" disabled>Очистить диагностику</button>
+          <button class="ghost" id="clearLogBtn" style="padding:6px 10px; font-size:12px;">Очистить</button>
+        </div>
       </div>
       <div class="log" id="log"></div>
     </div>
@@ -387,10 +394,47 @@
   <script src="/ui/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="/ui/chartjs-plugin-zoom.min.js"></script>
   <script>
+  // Диагностическое логирование (в UI и для выгрузки).
   const logUIEnabled = false;
-    const logUI = (msg) => {
-      if (logUIEnabled) console.info(`[UI LOG] ${msg}`);
-    };
+  const diagBuffer = [];
+  const diagLimit = 1000;
+  function updateDiagButtons() {
+    if (typeof els === 'undefined' || !els || !els.diagEnable) return;
+    els.diagEnable.checked = !!state.diagEnabled;
+    const has = diagBuffer.length > 0;
+    if (els.diagDownload) els.diagDownload.disabled = !has;
+    if (els.diagClear) els.diagClear.disabled = !has;
+  }
+  function pushDiag(line) {
+    if (!state.diagEnabled) return;
+    diagBuffer.push(line);
+    if (diagBuffer.length > diagLimit) diagBuffer.shift();
+    updateDiagButtons();
+  }
+  function downloadDiag() {
+    if (!diagBuffer.length) return;
+    const blob = new Blob([diagBuffer.join('\n')], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    a.href = url;
+    a.download = `diagnostics-${ts}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 0);
+  }
+  function clearDiag() {
+    diagBuffer.length = 0;
+    updateDiagButtons();
+  }
+  const logUI = (msg, warn = false) => {
+    const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
+    if (logUIEnabled) console.info(`[UI LOG] ${msg}`);
+    pushDiag(line);
+  };
   const chartLogEnabled = true;
   const chartLog = (msg, payload) => {
     if (!chartLogEnabled) return;
@@ -399,6 +443,7 @@
     } else {
       console.info(`[chart] ${msg}`);
     }
+    pushDiag(`[${new Date().toLocaleTimeString()}] [chart] ${msg}${payload ? ' ' + JSON.stringify(payload).slice(0, 200) : ''}`);
   };
 
     const els = {
@@ -441,6 +486,9 @@
       },
       log: document.getElementById('log'),
       clearLog: document.getElementById('clearLogBtn'),
+      diagEnable: document.getElementById('diagEnable'),
+      diagDownload: document.getElementById('diagDownload'),
+      diagClear: document.getElementById('diagClear'),
       dialog: document.getElementById('datetimeDialog'),
       dialogInput: document.getElementById('dtInput'),
       rangePicker: document.getElementById('rangePickerBtn'),
@@ -481,6 +529,12 @@
       rangeBtn: document.getElementById('rangeBtn'),
     };
     const inputs = els.inputs;
+    // Стартовые значения: блокируем плеер до загрузки диапазона.
+    setDisabled(els.controls.playPause, true);
+    setDisabled(els.controls.stop, true);
+    setDisabled(els.controls.stepBack, true);
+    setDisabled(els.controls.stepFwd, true);
+    setDisabled(els.timeline, true);
 
     // Fallbacks for tests: ensure invisible statusBadge exists.
     if (!els.status.badge) {
@@ -505,6 +559,8 @@
       saveAllowed: false,
       wsBytes: [],
       saveDirty: false,
+      diagEnabled: false,
+      rangePicked: false,
     };
 
     syncSaveToggle();
@@ -619,6 +675,7 @@
       while (els.log.children.length > 200) {
         els.log.removeChild(els.log.lastChild);
       }
+      pushDiag(`[${new Date().toLocaleTimeString()}] [log] ${message}`);
     }
 
     function trackWsBytes(n) {
@@ -660,7 +717,6 @@
         node.classList.toggle('active', name === tab);
       });
       if (tab === 'charts') {
-        preloadSensors();
         setTimeout(() => rebuildChart(true), 0);
       }
     }
@@ -726,11 +782,15 @@
         state.pausedAtTs = tsStr;
       }
     const normalizedUpdates = normalizeUpdates(msg);
-    switch (msg.type) {
+      switch (msg.type) {
       case 'reset':
         tableState.rows.clear();
-        tableState.meta.clear();
+        seedTableFromMeta();
+        if (!sensorIndex.hydrated) {
+          preloadSensors().catch(() => {});
+        }
         scheduleRenderTable(true);
+        pushDiag('[ws] reset');
           break;
         case 'snapshot':
           applySnapshot(msg.updates || [], tsStr);
@@ -748,10 +808,11 @@
 
     function applySnapshot(list, tsStr) {
       if (!Array.isArray(list)) return;
+      pushDiag(`[ws] snapshot rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
-        registerSensorMeta(key, item.name, item.textname);
+        registerSensorMeta(key, item.name, item.textname, item.iotype);
         const hasValue = itemHasValue(item);
         tableState.rows.set(key, {
           id: key,
@@ -769,6 +830,7 @@
   function applyTableUpdates(list, tsStr) {
     if (!Array.isArray(list)) return;
     const now = Date.now();
+      pushDiag(`[ws] updates rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
@@ -777,7 +839,7 @@
         const changed = !hadValue || prev.value !== item.value;
         const meta = tableState.meta.get(key) || {};
         const name = item.name || meta.name || prev.name || `${key}`;
-        registerSensorMeta(key, name, item.textname || meta.textname || prev.textname);
+        registerSensorMeta(key, name, item.textname || meta.textname || prev.textname, item.iotype || meta.iotype || prev.iotype);
         const hasValue = itemHasValue(item, hadValue);
         tableState.rows.set(key, {
           id: key,
@@ -936,13 +998,14 @@
       return `${id}`;
     }
 
-    function registerSensorMeta(id, name, textname) {
+    function registerSensorMeta(id, name, textname, iotype) {
       if (!Number.isFinite(id)) return;
       const prev = tableState.meta.get(id) || {};
       const resolvedName = name || prev.name || `${id}`;
       const resolvedText = textname !== undefined ? textname : prev.textname;
-      tableState.meta.set(id, { name: resolvedName, textname: resolvedText || '' });
-      sensorIndex.byId.set(id, { id, name: resolvedName, textname: resolvedText || '' });
+      const resolvedIO = iotype !== undefined ? iotype : prev.iotype;
+      tableState.meta.set(id, { name: resolvedName, textname: resolvedText || '', iotype: resolvedIO || '' });
+      sensorIndex.byId.set(id, { id, name: resolvedName, textname: resolvedText || '', iotype: resolvedIO || '' });
       sensorIndex.byName.set(String(resolvedName).toLowerCase(), id);
     }
 
@@ -975,7 +1038,7 @@
         const num = Number(id);
         if (!Number.isFinite(num)) return;
         if (!sensorIndex.byId.has(num)) {
-          registerSensorMeta(num, `${num}`, '');
+        registerSensorMeta(num, `${num}`, '', '');
         }
         if (sensorIndex.byId.has(num)) res.push(num);
       });
@@ -1721,34 +1784,53 @@
       }
     }
 
-    function requestJSON(method, url, body) {
-      logUI(`fetch ${method} ${url} body=${body ? JSON.stringify(body) : ''}`);
-      const init = { method, headers: {} };
-      if (body !== undefined) {
-        init.headers['Content-Type'] = 'application/json';
-        init.body = JSON.stringify(body);
+  function requestJSON(method, url, body) {
+    logUI(`fetch ${method} ${url} body=${body ? JSON.stringify(body) : ''}`);
+    const init = { method, headers: {} };
+    if (body !== undefined) {
+      init.headers['Content-Type'] = 'application/json';
+      init.body = JSON.stringify(body);
+    }
+    return fetch(url, init).then(async (resp) => {
+      const text = await resp.text();
+      let payload = null;
+      if (text) { try { payload = JSON.parse(text); } catch (_) {} }
+    logUI(`fetch result ${resp.status} ${resp.statusText} payload=${text || '<empty>'}`);
+      pushDiag(`[fetch] ${method} ${url} -> ${resp.status} ${resp.statusText} ${text || '<empty>'}`);
+      if (!resp.ok) {
+        throw new Error(payload?.error || text || `HTTP ${resp.status}`);
       }
-      return fetch(url, init).then(async (resp) => {
-        const text = await resp.text();
-        let payload = null;
-        if (text) { try { payload = JSON.parse(text); } catch (_) {} }
-        logUI(`fetch result ${resp.status} ${resp.statusText} payload=${text || '<empty>'}`);
-        if (!resp.ok) {
-          throw new Error(payload?.error || text || `HTTP ${resp.status}`);
-        }
-        return payload;
-      });
+      return payload;
+    });
     }
 
-    function mergeSensorsFromAPI(list) {
-      if (!Array.isArray(list)) return;
-      list.forEach((item) => {
-        const id = Number(item.id);
-        if (!Number.isFinite(id)) return;
-        registerSensorMeta(id, item.name, item.textname);
-      });
-      refreshChartSuggestions();
-    }
+  function mergeSensorsFromAPI(list) {
+    if (!Array.isArray(list)) return;
+    list.forEach((item) => {
+      const id = Number(item.id);
+      if (!Number.isFinite(id)) return;
+      registerSensorMeta(id, item.name, item.textname, item.iotype);
+    });
+    seedTableFromMeta();
+    refreshChartSuggestions();
+  }
+
+  function seedTableFromMeta() {
+    sensorIndex.byId.forEach((meta, id) => {
+      if (!tableState.rows.has(id)) {
+        tableState.rows.set(id, {
+          id,
+          name: meta.name || `${id}`,
+          textname: meta.textname || '',
+          value: undefined,
+          hasValue: false,
+          stepID: tableState.lastStep || 0,
+          ts: tableState.lastTs || '',
+        });
+      }
+    });
+    scheduleRenderTable(true);
+  }
 
     async function fetchSnapshotFallback() {
       try {
@@ -1765,16 +1847,22 @@
       }
     }
 
-    async function preloadSensors() {
-      if (sensorIndex.hydrated) return;
+  async function preloadSensors() {
+      if (sensorIndex.hydrated) {
+        pushDiag('[sensors] skip preload: hydrated');
+        return;
+      }
       try {
+        pushDiag('[sensors] preload start');
         const data = await requestJSON('GET', '/api/v2/sensors');
         const list = data?.sensors || [];
         mergeSensorsFromAPI(list);
         sensorIndex.hydrated = list.length > 0;
+        pushDiag(`[sensors] loaded count=${list.length}`);
         renderChartSuggestions(els.charts.sensors?.value || '');
       } catch (err) {
         logUI(`[chart] preload sensors failed: ${err.message}`);
+        pushDiag(`[sensors] preload failed: ${err.message}`);
       }
     }
 
@@ -1991,7 +2079,7 @@
       setDisabled(els.controls.stepBack, !canStep || atStart);
       setDisabled(els.controls.stepFwd, !canStep || atEnd);
       setDisabled(els.controls.stop, !active);
-      const hasRange = range.valid;
+      const hasRange = range.valid && (active || (st === 'pending' && state.rangePicked)); // диапазон считаем заданным только если он активен или пользователь выбрал его в этой сессии
       setDisabled(els.controls.playPause, st === 'failed' || !hasRange);
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
@@ -2016,6 +2104,9 @@
     function setDisabled(el, disabled) {
       if (!el) return;
       el.disabled = !!disabled;
+      el.setAttribute('aria-disabled', disabled ? 'true' : 'false');
+      if (disabled) el.classList.add('is-disabled');
+      else el.classList.remove('is-disabled');
     }
 
     function updateRangeLabel() {
@@ -2064,39 +2155,58 @@
       return /^\d+(ms|s|m|h)$/.test(v);
     }
 
-    async function refresh(full = false) {
-      const url = '/api/v2/job';
+  async function refresh(full = false) {
+    if (!sensorIndex.hydrated) {
+      await preloadSensors();
+    }
+    const url = '/api/v2/job';
       logUI(`refresh ${full ? 'full' : 'state'} start last_ts=${state.model.last_ts || state.model.LastTS}`);
       const data = await requestJSON('GET', url);
       const status = statusNormalize(data?.status || data?.Status || state.model.status);
+      pushDiag(`[refresh] ${full ? 'full' : 'state'} status=${status} step=${data?.step_id ?? data?.StepID ?? '-'} ts=${data?.last_ts ?? data?.LastTS ?? '-'}`);
       const pending = data?.pending || data?.Pending || {};
       state.model = { ...data, status, pending };
       // Если нет активных params, но есть pending range — используем его для отображения.
-      const pendingRange = pending.range_set ? pending.range : pending.Range;
-      if (!state.model.params && !state.model.Params && pendingRange) {
-        state.model.params = pendingRange;
-        state.model.Params = pendingRange;
+    const pendingRange = pending.range_set ? pending.range : pending.Range;
+    if (!state.model.params && !state.model.Params && pendingRange) {
+      state.model.params = pendingRange;
+      state.model.Params = pendingRange;
+    }
+    // Если после обновления таблица пуста, а метаданные уже есть, подсетим строки.
+    if (!tableState.rows.size && sensorIndex.byId.size) {
+      seedTableFromMeta();
+    } else if (!sensorIndex.hydrated) {
+      preloadSensors().catch(() => {});
+    }
+    state.saveAllowed = !!(data?.save_allowed ?? data?.SaveAllowed ?? state.saveAllowed);
+    syncSaveToggle();
+    hydrateChartDefaultsFromParams();
+    syncChartWithParams(state.model.params || state.model.Params);
+    syncChartRange(state.model.params || state.model.Params, pending);
+      // Если на сервере уже есть pending диапазон, считаем его выбранным (важно для восстановления состояния и тестов).
+      if (pendingRange && !state.rangePicked) {
+        state.rangePicked = true;
       }
-      state.saveAllowed = !!(data?.save_allowed ?? data?.SaveAllowed ?? state.saveAllowed);
-      syncSaveToggle();
-      hydrateChartDefaultsFromParams();
-      syncChartWithParams(state.model.params || state.model.Params);
-      syncChartRange(state.model.params || state.model.Params, pending);
       logUI(`refresh result status=${status} last_ts=${state.model.last_ts || state.model.LastTS} pendingRange=${pendingRange ? 'yes' : 'no'}`);
       updateStatusView();
-    }
+  }
 
-    async function startJob() {
-      const payload = validateStartForm();
-      if (!payload) return;
-      if (rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit) {
-        log(`В диапазоне ${rangeSensorCount} датчиков, автодобавление в графики отключено (лимит ${chartAutoAddLimit})`, true);
+  async function startJob() {
+      if (!sensorIndex.hydrated) {
+        await preloadSensors().catch(() => {});
       }
+    const payload = validateStartForm();
+    if (!payload) return;
+    if (rangeSensorCountKnown && rangeSensorCount > chartAutoAddLimit) {
+      log(`В диапазоне ${rangeSensorCount} датчиков, автодобавление в графики отключено (лимит ${chartAutoAddLimit})`, true);
+    }
       logUI(`set range v2 ${JSON.stringify(payload)}`);
       await requestJSON('POST', '/api/v2/job/range', payload);
+      state.rangePicked = true;
       await fetchSensorCount(payload.from, payload.to);
       logUI('startJob (v2) using pending');
       try {
+        pushDiag('[action] start');
         await requestJSON('POST', '/api/v2/job/start', { save_output: payload.save_output });
         log('Старт отправлен');
         await refresh(true);
@@ -2212,6 +2322,7 @@
             if (!payload) return;
             try {
               await requestJSON('POST', '/api/v2/job/range', payload);
+              state.rangePicked = true;
               await fetchSensorCount(payload.from, payload.to);
               await refresh(true);
             } catch (err) {
@@ -2255,6 +2366,24 @@
       });
       els.controls.playPause.addEventListener('click', onPlayPause);
       els.clearLog.addEventListener('click', () => { els.log.innerHTML = ''; });
+      if (els.diagEnable) {
+        els.diagEnable.addEventListener('change', () => {
+          state.diagEnabled = !!els.diagEnable.checked;
+          if (!state.diagEnabled) {
+            diagBuffer.length = 0;
+          } else if (!sensorIndex.hydrated) {
+            preloadSensors().catch(() => {});
+          }
+          logUI(`Диагностика ${state.diagEnabled ? 'включена' : 'выключена'}`);
+          updateDiagButtons();
+        });
+      }
+      if (els.diagDownload) {
+        els.diagDownload.addEventListener('click', () => downloadDiag());
+      }
+      if (els.diagClear) {
+        els.diagClear.addEventListener('click', () => clearDiag());
+      }
       if (els.rangeBtn) {
         els.rangeBtn.addEventListener('click', () => applyAvailableRange(true));
       }
@@ -2649,13 +2778,7 @@
     scheduleRenderTable(true);
     updateChartMeta();
     updateRangeLabel();
-
-    if (new URLSearchParams(location.search).get('test') === '1') {
-      const script = document.createElement('script');
-      script.src = '/ui/index.test.js';
-      script.defer = true;
-      document.body.appendChild(script);
-    }
+    updateDiagButtons();
 
     async function applyAvailableRange(intoDialog = false) {
       try {

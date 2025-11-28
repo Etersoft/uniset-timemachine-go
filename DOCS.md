@@ -21,15 +21,18 @@ go run ./cmd/timemachine \
 - `GET /healthz` — liveness.
 - `GET /ui/` — простой веб-интерфейс (встроенная статика).
   - API допускает CORS с `Access-Control-Allow-Origin: *`, поэтому `/ui/` можно открывать даже с `file://` или с отдельного домена; предзапросы `OPTIONS` поддерживаются.
-- `GET /api/v2/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`.
+- `GET /api/v2/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`. Без upgrade вернёт `400/426`, а при отсутствующем streamer — `503`.
 - `/debug/pprof/*` — стандартные endpoint’ы pprof для съёма профилей (CPU/heap/trace) во время работы.
 
 ### API v2 (pending range/seek)
 
+- `GET /api/v2/sensors` — список датчиков (`id,name,textname,iotype`) и `count`.
+- `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне.
 - `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max и `sensor_count`.
 - `POST /api/v2/job/seek` — перемотка; если job не запущен, запоминает pending seek.
 - `POST /api/v2/job/start` — запустить задачу, используя pending range/seek.
-- `POST /api/v2/job/pause|resume|stop|apply|step/forward|step/backward` — команды как в v1.
+- `POST /api/v2/job/reset` — сбросить состояние сервера: остановить задачу, очистить pending range/seek, отправить `reset` в WebSocket.
+- `POST /api/v2/job/pause|resume|stop|apply|step/forward|step/backward` — команды управления.
 - `GET /api/v2/job` — статус + pending (`range_set`, `range`, `seek_set`, `seek_ts`).
 - `POST /api/v2/snapshot` — одноразовый расчёт состояния на `ts` без записи в SM.
 
@@ -39,6 +42,7 @@ go run ./cmd/timemachine \
 curl -s -X POST http://localhost:8080/api/v2/job/range \
   -d '{"from":"2024-06-01T00:00:00Z","to":"2024-06-01T00:00:10Z","step":"1s","speed":1,"window":"15s"}'
 curl -s -X POST http://localhost:8080/api/v2/job/start
+curl -s -X POST http://localhost:8080/api/v2/job/reset
 ```
 
 Ответ: `{"status":"running"}`. При активной задаче `/start` возвращает `409` с сообщением `job is already active`.

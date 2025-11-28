@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 test('log panel shows entries and clears on click', async ({ page }) => {
+  await page.request.post('/api/v2/job/reset');
   await page.goto('/ui/');
 
   // Helper to set hidden inputs.
@@ -28,17 +29,15 @@ test('log panel shows entries and clears on click', async ({ page }) => {
   await page.request.post('/api/v2/job/range', {
     data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
   });
-  await page.waitForFunction(() => {
-    const el = document.querySelector<HTMLButtonElement>('#playPauseBtn');
-    return !!el && !el.disabled;
-  }, { timeout: 15_000 });
+  await page.waitForTimeout(1500);
+  await expect(page.locator('#playPauseBtn')).toBeEnabled({ timeout: 5_000 });
 
   const logEntries = page.locator('#log .log-entry');
   const clearBtn = page.locator('#clearLogBtn');
   const playBtn = page.locator('#playPauseBtn');
 
   // Ждём, пока лог что-то покажет после инициализации.
-  await page.waitForFunction(() => document.querySelectorAll('#log .log-entry').length > 0, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll('#log .log-entry').length > 0, { timeout: 8_000 });
 
   // Очищаем.
   await clearBtn.click();
@@ -46,7 +45,7 @@ test('log panel shows entries and clears on click', async ({ page }) => {
 
   // Действие, которое гарантированно логирует ("Старт отправлен" / ошибка).
   await playBtn.click();
-  await page.waitForFunction(() => document.querySelectorAll('#log .log-entry').length > 0, { timeout: 15_000 });
+  await page.waitForFunction(() => document.querySelectorAll('#log .log-entry').length > 0, { timeout: 8_000 });
 
   // Остановим задачу для чистоты.
   await page.request.post('/api/v2/job/stop', { data: {} });

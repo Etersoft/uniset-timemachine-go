@@ -14,6 +14,7 @@ help:
 	@echo "  gen-sensors - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
 	@echo "  gen-db      - generate SQLite dataset (see GEN_DB_*)"
 	@echo "  gen-config-example - write config/config-example.yaml"
+	@echo "  coverage    - run go test with coverage profile"
 	@echo "  bench       - run timemachine bench using $(CONFIG_YAML) (override via BENCH_FLAGS)"
 	@echo "  check-sm    - send test set/get to SharedMemory"
 	@echo "  clean-bench - remove generated SQLite/ClickHouse artifacts"
@@ -57,6 +58,13 @@ gen-db:
 
 gen-config-example:
 	@./scripts/gen-config-example.sh
+
+COVERAGE_PROFILE ?= coverage.out
+
+coverage:
+	@echo "Running Go coverage into $(COVERAGE_PROFILE)..."
+	@GOCACHE=$(PWD)/.gocache go test -covermode=count -coverprofile=$(COVERAGE_PROFILE) ./...
+	@go tool cover -func=$(COVERAGE_PROFILE) | tail -n 1
 
 BENCH_FLAGS ?=
 

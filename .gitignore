@@ -8,3 +8,4 @@ codex-session.sh
 .env
 sqlite-large.db
 config/generated-sensors.xml
+coverage.out

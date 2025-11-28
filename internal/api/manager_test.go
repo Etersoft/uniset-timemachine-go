@@ -304,6 +304,109 @@ func TestManagerStopFromPausedAndRunning(t *testing.T) {
 	waitManagerStatus(t, mgr, []string{"done", "failed"}, 2*time.Second)
 }
 
+func TestManagerErrorBranches(t *testing.T) {
+	mgr := newTestManager(t)
+	if err := mgr.StartPending(context.Background()); err == nil {
+		t.Fatalf("expected error when pending range is not set")
+	}
+	if err := mgr.SetSaveOutput(true); err == nil {
+		t.Fatalf("expected error on set save output without job")
+	}
+
+	// Запускаем задачу, а затем пытаемся стартовать pending поверх неё.
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(2 * time.Second)
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
+		t.Fatalf("start returned error: %v", err)
+	}
+	mgr.SetRange(from, to, time.Second, 1, time.Second, true)
+	if err := mgr.StartPending(context.Background()); err == nil {
+		t.Fatalf("expected error when job already active and pending start called")
+	}
+	_ = mgr.Stop()
+}
+
+func TestManagerDefaultsApplied(t *testing.T) {
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	step := 200 * time.Millisecond
+	to := from.Add(2 * time.Second)
+	store := memstore.NewExampleStore([]int64{1}, from, to, step)
+	svc := replay.Service{
+		Storage: store,
+		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
+	}
+	mgr := NewManager(svc, []int64{1}, nil, 0, 0, 4, nil, false, false)
+	if err := mgr.Start(context.Background(), from, to, step, 0, 0, true); err != nil {
+		t.Fatalf("start with defaults: %v", err)
+	}
+	st := mgr.Status()
+	if st.Params.SaveOutput {
+		t.Fatalf("save_output should be false when saveAllowed is false")
+	}
+	if st.Params.Step != step || st.Params.Window <= 0 || st.Params.Speed <= 0 {
+		t.Fatalf("defaults not applied: %#v", st.Params)
+	}
+	_ = mgr.Stop()
+}
+
+func TestManagerStartConflictsByStatus(t *testing.T) {
+	mgr := newTestManager(t)
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(2 * time.Second)
+
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err == nil {
+		t.Fatalf("expected conflict when job running")
+	}
+	if err := mgr.Pause(); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err == nil {
+		t.Fatalf("expected conflict when job paused")
+	}
+	_ = mgr.Stop()
+	waitManagerStatus(t, mgr, []string{"done", "failed"}, 2*time.Second)
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
+		t.Fatalf("start after stop should succeed: %v", err)
+	}
+	_ = mgr.Stop()
+}
+
+func TestManagerSetSaveOutputActiveJob(t *testing.T) {
+	mgr := newTestManager(t)
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(2 * time.Second)
+	if err := mgr.Start(context.Background(), from, to, time.Second, 1, time.Second, true); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := mgr.SetSaveOutput(false); err != nil {
+		t.Fatalf("set save output on job: %v", err)
+	}
+	st := mgr.Status()
+	if st.Params.SaveOutput {
+		t.Fatalf("save_output should be false after SetSaveOutput(false)")
+	}
+	_ = mgr.Stop()
+}
+
+func TestManagerStartPendingWithSeekResume(t *testing.T) {
+	mgr := newTestManager(t)
+	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(4 * time.Second)
+	seekTs := from.Add(2 * time.Second)
+
+	mgr.SetRange(from, to, time.Second, 1, time.Second, true)
+	mgr.SetPendingSeek(seekTs)
+	if err := mgr.StartPending(context.Background()); err != nil {
+		t.Fatalf("StartPending: %v", err)
+	}
+	waitManagerStatus(t, mgr, []string{"paused", "running"}, 2*time.Second)
+	waitForCond(t, 2*time.Second, func() bool { return approxTime(mgr.Status().LastTS, seekTs, time.Second) })
+	_ = mgr.Stop()
+}
+
 // captureClientForManagerTest is a local copy to avoid import cycle with http_sqlite_test.
 type captureClientForManagerTest struct {
 	mu       sync.Mutex

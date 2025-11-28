@@ -56,6 +56,7 @@ func TestHTTPAPIWithSQLiteAutoSeed(t *testing.T) {
 		"step":   "1s",
 		"speed":  50.0,
 		"window": "2s",
+		"save_output": true,
 	}
 	postJSON(t, ts.URL+"/api/v2/job/range", body)
 	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusOK {

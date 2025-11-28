@@ -86,10 +86,55 @@ func TestJobStartConflict(t *testing.T) {
 	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusOK {
 		t.Fatalf("start job status = %d, want 200", resp.StatusCode)
 	}
-	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusConflict {
-		t.Fatalf("second start status = %d, want 409", resp.StatusCode)
+	if resp := postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{}); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("second start status = %d, want 400", resp.StatusCode)
 	}
 	mgr.Stop()
+}
+
+func TestJobStopStatus(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	from := time.Now().UTC().Add(-time.Second).Truncate(time.Second)
+	to := from.Add(2 * time.Second)
+	body := map[string]any{
+		"from":  from.Format(time.RFC3339),
+		"to":    to.Format(time.RFC3339),
+		"step":  "1s",
+		"speed": 1.0,
+	}
+	postJSON(t, ts.URL+"/api/v2/job/range", body)
+	postJSON(t, ts.URL+"/api/v2/job/start", map[string]any{})
+
+	if resp := postJSON(t, ts.URL+"/api/v2/job/stop", nil); resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop status = %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestHandlersInvalidJSON(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	cases := []string{
+		"/api/v2/job/range",
+		"/api/v2/job/seek",
+		"/api/v2/job/step/forward",
+		"/api/v2/job/step/backward",
+		"/api/v2/job/apply",
+		"/api/v2/job/resume",
+	}
+	for _, path := range cases {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, bytes.NewBufferString(`{"bad":`))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("%s expected 400 on bad json, got %d", path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
 }
 
 func TestPauseResumeAndState(t *testing.T) {
@@ -123,6 +168,15 @@ func TestPauseResumeAndState(t *testing.T) {
 	}
 
 	postJSON(t, ts.URL+"/api/v2/job/stop", nil)
+}
+
+func TestStartPendingWithoutRange(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+	resp := postJSON(t, ts.URL+"/api/v2/job/start", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("start without pending range = %d, want 400", resp.StatusCode)
+	}
 }
 
 func TestStepBackwardSeekApplySnapshot(t *testing.T) {
@@ -193,16 +247,74 @@ func TestRangeEndpoint(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("range %s status = %d, want 200", path, resp.StatusCode)
 		}
-		var body map[string]string
+		var body map[string]any
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			t.Fatalf("decode %s: %v", path, err)
 		}
-		if body["from"] == "" || body["to"] == "" {
+		if body["from"] == nil || body["to"] == nil {
 			t.Fatalf("%s response empty: %#v", path, body)
 		}
 	}
 
 	check("/api/v2/job/range")
+}
+
+func TestSensorsCountAndSnapshotErrors(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+
+	// bad from
+	resp, err := http.Get(ts.URL + "/api/v2/job/sensors/count?from=bad")
+	if err != nil {
+		t.Fatalf("get sensors count: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("sensors count bad from = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// ok
+	resp, err = http.Get(ts.URL + "/api/v2/job/sensors/count?from=2024-06-01T00:00:00Z&to=2024-06-01T00:00:05Z")
+	if err != nil {
+		t.Fatalf("get sensors count ok: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sensors count status = %d, want 200", resp.StatusCode)
+	}
+	var body map[string]any
+	_ = json.NewDecoder(resp.Body).Decode(&body)
+	resp.Body.Close()
+	if body["sensor_count"] == nil {
+		t.Fatalf("sensor_count missing in response")
+	}
+
+	// snapshot invalid ts
+	resp = postJSON(t, ts.URL+"/api/v2/snapshot", map[string]any{"ts": "bad"})
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("snapshot bad ts status = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// snapshot ok
+	resp = postJSON(t, ts.URL+"/api/v2/snapshot", map[string]any{"ts": "2024-06-01T00:00:00Z"})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("snapshot ok status = %d, want 200", resp.StatusCode)
+	}
+	resp.Body.Close()
+}
+
+func TestWSStateEndpoint(t *testing.T) {
+	ts, _ := newTestServer(t)
+	defer ts.Close()
+	// HTTP GET should fail (expect upgrade required / bad request).
+	resp, err := http.Get(ts.URL + "/api/v2/ws/state")
+	if err != nil {
+		t.Fatalf("ws state GET: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest && resp.StatusCode != http.StatusUpgradeRequired {
+		t.Fatalf("ws state GET status = %d, want 400/426", resp.StatusCode)
+	}
+	resp.Body.Close()
 }
 
 func TestJobV2PendingFlow(t *testing.T) {
@@ -263,6 +375,11 @@ func TestV2CommandsLifecycle(t *testing.T) {
 	if resp := postJSON(t, ts.URL+"/api/v2/job/range", rangeBody); resp.StatusCode != http.StatusOK {
 		t.Fatalf("v2 range status = %d, want 200", resp.StatusCode)
 	}
+	// Pending seek when no job -> pending status OK.
+	if resp := postJSON(t, ts.URL+"/api/v2/job/seek", map[string]any{"ts": seekTs.Format(time.RFC3339), "apply": false}); resp.StatusCode != http.StatusOK {
+		t.Fatalf("v2 seek pending status = %d, want 200", resp.StatusCode)
+	}
+
 	if resp := postJSON(t, ts.URL+"/api/v2/job/start", nil); resp.StatusCode != http.StatusOK {
 		t.Fatalf("v2 start status = %d, want 200", resp.StatusCode)
 	}

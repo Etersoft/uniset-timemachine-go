@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -10,6 +11,44 @@ import (
 
 	"github.com/pv/uniset-timemachine-go/internal/storage"
 )
+
+func TestNewErrorsAndHelpers(t *testing.T) {
+	ctx := context.Background()
+	if _, err := New(ctx, Config{}); err == nil {
+		t.Fatalf("expected error on empty conn string")
+	}
+	if !IsPostgresURL("postgres://localhost/db") || !IsPostgresURL("postgresql://host/db") {
+		t.Fatalf("IsPostgresURL failed on valid inputs")
+	}
+	if IsPostgresURL("http://example.com") {
+		t.Fatalf("IsPostgresURL false positive")
+	}
+	if got := sensorsAsArray([]int64{1, 2, 3}); !reflect.DeepEqual(got, []int64{1, 2, 3}) {
+		t.Fatalf("sensorsAsArray mismatch: %#v", got)
+	}
+	ts := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
+	if got := combineTimestamp(ts, 500_000); !got.Equal(ts.Add(500 * time.Millisecond)) {
+		t.Fatalf("combineTimestamp mismatch: %s", got)
+	}
+}
+
+func TestStreamRangeWarmupEmptySensors(t *testing.T) {
+	store := &Store{}
+	// Warmup should short-circuit.
+	evs, err := store.Warmup(context.Background(), nil, time.Time{})
+	if err != nil || len(evs) != 0 {
+		t.Fatalf("Warmup empty sensors got err=%v len=%d", err, len(evs))
+	}
+	// Range should error.
+	if _, _, _, err := store.Range(context.Background(), nil, time.Time{}, time.Time{}); err == nil {
+		t.Fatalf("Range empty sensors expected error")
+	}
+	// Stream should return error on channel immediately.
+	_, errCh := store.Stream(context.Background(), storage.StreamRequest{})
+	if err := <-errCh; err == nil {
+		t.Fatalf("Stream empty sensors expected error")
+	}
+}
 
 func TestStoreWarmupStreamAndRange_Postgres(t *testing.T) {
 	dsn := os.Getenv("TM_POSTGRES_DSN")

@@ -227,23 +227,11 @@
     </div>
 
     <div class="card">
+      <div class="timeline-label" id="currentLabel" style="text-align:center; font-size:13px; margin-bottom:8px; color:#cbd5e1;">-</div>
       <div class="timeline">
         <div class="timeline-label" id="fromLabel">from: -</div>
         <input id="timeline" type="range" min="0" max="1000" value="0" disabled>
         <div class="timeline-label" id="toLabel">to: -</div>
-      </div>
-      <div class="row center" style="justify-content:space-between; margin-top:8px; gap:10px; flex-wrap:wrap; width:100%;">
-        <div style="flex:1; display:flex; justify-content:flex-start;">
-          <button class="ghost" id="jumpStartBtn" type="button" style="padding:8px 10px;">В начало</button>
-        </div>
-        <div style="flex:1; display:flex; justify-content:center;">
-          <div class="status-item" style="min-width:200px; text-align:center;">
-            <div id="currentLabel">-</div>
-          </div>
-        </div>
-        <div style="flex:1; display:flex; justify-content:flex-end;">
-          <button class="ghost" id="jumpEndBtn" type="button" style="padding:8px 10px;">В конец</button>
-        </div>
       </div>
       <div class="muted" id="errorNote" style="text-align:center; margin-top:6px;"></div>
     </div>
@@ -481,6 +469,32 @@
     </form>
   </dialog>
 
+  <dialog id="preciseTimeDialog">
+    <form method="dialog">
+      <h3 style="margin:0 0 6px;">Точная позиция воспроизведения</h3>
+      <p class="muted" style="margin:0 0 10px;">Укажите точное время для перемотки.</p>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px; margin-bottom:10px;">
+        <div>
+          <label for="preciseDate">Дата</label>
+          <input id="preciseDate" type="date" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0;">
+        </div>
+        <div>
+          <label for="preciseTime">Время (ЧЧ:ММ:СС)</label>
+          <input id="preciseTime" type="text" placeholder="12:34:56" pattern="[0-2][0-9]:[0-5][0-9]:[0-5][0-9]" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0; font-family: 'JetBrains Mono', monospace;">
+        </div>
+      </div>
+      <div>
+        <label for="preciseMillis">Миллисекунды (0-999)</label>
+        <input id="preciseMillis" type="number" min="0" max="999" step="1" placeholder="000" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0; font-family: 'JetBrains Mono', monospace;">
+      </div>
+      <div id="preciseTimeError" class="error-text" style="margin-top:8px; min-height:18px;"></div>
+      <div class="dlg-actions">
+        <button type="submit" value="cancel" class="ghost">Отмена</button>
+        <button type="submit" value="ok">Применить</button>
+      </div>
+    </form>
+  </dialog>
+
   <script src="/ui/chart.umd.min.js"></script>
   <script src="/ui/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script src="/ui/chartjs-plugin-zoom.min.js"></script>
@@ -601,8 +615,6 @@
         playPause: document.getElementById('playPauseBtn'),
         stop: document.getElementById('stopBtn'),
         stepFwd: document.getElementById('stepFwdBtn'),
-        jumpStart: document.getElementById('jumpStartBtn'),
-        jumpEnd: document.getElementById('jumpEndBtn'),
       },
       log: document.getElementById('log'),
       clearLog: document.getElementById('clearLogBtn'),
@@ -663,6 +675,11 @@
       sensorsResetBtn: document.getElementById('sensorsResetBtn'),
       sensorsApplyBtn: document.getElementById('sensorsApplyBtn'),
       sensorsCancelBtn: document.getElementById('sensorsCancelBtn'),
+      preciseTimeDialog: document.getElementById('preciseTimeDialog'),
+      preciseDate: document.getElementById('preciseDate'),
+      preciseTime: document.getElementById('preciseTime'),
+      preciseMillis: document.getElementById('preciseMillis'),
+      preciseTimeError: document.getElementById('preciseTimeError'),
     };
     const inputs = els.inputs;
     // Стартовые значения: блокируем плеер до загрузки диапазона.
@@ -2640,12 +2657,6 @@
       if (els.rangeBtn) {
         setDisabled(els.rangeBtn, readOnly || active); // не трогаем диапазон во время активной задачи
       }
-      if (els.controls.jumpStart) {
-        setDisabled(els.controls.jumpStart, readOnly || !hasWorking || !range.valid || st === 'running' || st === 'stopping');
-      }
-      if (els.controls.jumpEnd) {
-        setDisabled(els.controls.jumpEnd, readOnly || !hasWorking || !range.valid || st === 'running' || st === 'stopping');
-      }
       if (els.inputs.saveToSM) {
         const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
         setDisabled(els.inputs.saveToSM, readOnly || runningLike || !allowed);
@@ -3071,6 +3082,93 @@
           renderLegendTable();
         });
       }
+      if (els.preciseTimeDialog) {
+        // Обработчик submit формы для валидации
+        const preciseForm = els.preciseTimeDialog.querySelector('form');
+        if (preciseForm) {
+          preciseForm.addEventListener('submit', async (e) => {
+            const submitValue = (e.submitter && e.submitter.value) || '';
+            if (submitValue !== 'ok') {
+              // Отмена - разрешаем закрытие
+              return;
+            }
+
+            // Проверка перед закрытием
+            e.preventDefault();
+            els.preciseTimeError.textContent = '';
+
+            const date = els.preciseDate.value;
+            const time = els.preciseTime.value;
+            const millis = els.preciseMillis.value || '0';
+
+            if (!date || !time) {
+              els.preciseTimeError.textContent = 'Заполните дату и время';
+              return;
+            }
+
+            // Парсим время
+            const timeParts = time.match(/^(\d{2}):(\d{2}):(\d{2})$/);
+            if (!timeParts) {
+              els.preciseTimeError.textContent = 'Неверный формат времени (ЧЧ:ММ:СС)';
+              return;
+            }
+
+            const hours = parseInt(timeParts[1], 10);
+            const minutes = parseInt(timeParts[2], 10);
+            const seconds = parseInt(timeParts[3], 10);
+            const milliseconds = parseInt(millis, 10);
+
+            if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59 || seconds < 0 || seconds > 59 || milliseconds < 0 || milliseconds > 999) {
+              els.preciseTimeError.textContent = 'Значения вне допустимых диапазонов';
+              return;
+            }
+
+            // Создаём дату из введённых данных
+            const targetDate = new Date(date + 'T00:00:00.000Z');
+            targetDate.setUTCHours(hours);
+            targetDate.setUTCMinutes(minutes);
+            targetDate.setUTCSeconds(seconds);
+            targetDate.setUTCMilliseconds(milliseconds);
+
+            // Проверяем что дата в допустимом диапазоне
+            const params = state.model.params || state.model.Params || {};
+            const pending = state.model.pending || state.model.Pending || {};
+            const range = getEffectiveRange(params, pending);
+
+            if (!range.valid) {
+              els.preciseTimeError.textContent = 'Диапазон не установлен';
+              return;
+            }
+
+            if (targetDate < range.from || targetDate > range.to) {
+              els.preciseTimeError.textContent = 'Время вне диапазона воспроизведения';
+              return;
+            }
+
+            // Преобразуем в RFC3339 и отправляем seek
+            const ts = toRFC3339(targetDate);
+            if (!ts) {
+              els.preciseTimeError.textContent = 'Ошибка преобразования даты';
+              return;
+            }
+
+            logUI(`Точная перемотка на ${ts}`);
+
+            try {
+              await action('seek (точная)', '/api/v2/job/seek', { ts, apply: true });
+              // Обновляем позицию слайдера
+              const ratio = (targetDate - range.from) / (range.to - range.from);
+              els.timeline.value = Math.round(ratio * 1000);
+              state.previewTs = targetDate;
+
+              // Успешно - закрываем диалог
+              els.preciseTimeDialog.close('ok');
+            } catch (err) {
+              els.preciseTimeError.textContent = `Ошибка: ${err.message}`;
+            }
+          });
+        }
+      }
       els.timeline.addEventListener('change', onTimelineSeek);
       els.timeline.addEventListener('input', onTimelinePreview);
       els.timeline.addEventListener('pointerdown', () => {
@@ -3082,6 +3180,7 @@
         const ts = toRFC3339(new Date(range.from.getTime() + (range.to - range.from) * v));
         if (ts) logUI(`timeline drag start ${ts}`);
       });
+      els.timeline.addEventListener('dblclick', openPreciseTimeDialog);
       els.controls.stepBack.addEventListener('click', () => action('step назад', '/api/v2/job/step/backward', { apply: true }));
       els.controls.stepFwd.addEventListener('click', () => action('step вперёд', '/api/v2/job/step/forward'));
       els.controls.stop.addEventListener('click', () => {
@@ -3119,12 +3218,6 @@
       }
       if (els.rangeBtn) {
         els.rangeBtn.addEventListener('click', () => applyAvailableRange(true));
-      }
-      if (els.controls.jumpStart) {
-        els.controls.jumpStart.addEventListener('click', () => jumpToEdge('start'));
-      }
-      if (els.controls.jumpEnd) {
-        els.controls.jumpEnd.addEventListener('click', () => jumpToEdge('end'));
       }
       if (els.charts.apply) {
         els.charts.apply.addEventListener('click', () => {
@@ -3337,6 +3430,53 @@
       if (els.rangeTo) els.rangeTo.value = isoToLocalInput(toRFC3339(now));
     }
 
+    function openPreciseTimeDialog() {
+      if (!els.preciseTimeDialog) return;
+
+      // Очищаем ошибки
+      els.preciseTimeError.textContent = '';
+
+      // Получаем текущую позицию из timeline
+      const params = state.model.params || state.model.Params || {};
+      const pending = state.model.pending || state.model.Pending || {};
+      const range = getEffectiveRange(params, pending);
+
+      if (!range.valid) {
+        els.preciseTimeError.textContent = 'Диапазон не установлен';
+        els.preciseTimeDialog.showModal();
+        return;
+      }
+
+      // Вычисляем текущую дату из позиции слайдера
+      const v = Number(els.timeline.value) / 1000;
+      const currentDate = new Date(range.from.getTime() + (range.to - range.from) * v);
+
+      // Форматируем дату в формат YYYY-MM-DD
+      const year = currentDate.getUTCFullYear();
+      const month = String(currentDate.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(currentDate.getUTCDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
+
+      // Форматируем время в формат ЧЧ:ММ:СС
+      const hours = String(currentDate.getUTCHours()).padStart(2, '0');
+      const minutes = String(currentDate.getUTCMinutes()).padStart(2, '0');
+      const seconds = String(currentDate.getUTCSeconds()).padStart(2, '0');
+      const timeStr = `${hours}:${minutes}:${seconds}`;
+
+      // Получаем миллисекунды
+      const millis = String(currentDate.getUTCMilliseconds());
+
+      // Заполняем поля диалога
+      els.preciseDate.value = dateStr;
+      els.preciseTime.value = timeStr;
+      els.preciseMillis.value = millis;
+
+      // Открываем диалог
+      els.preciseTimeDialog.showModal();
+
+      logUI(`Открыт диалог точной позиции для ${dateStr} ${timeStr}.${millis}`);
+    }
+
     function isoToLocalInput(iso) {
       const d = parseISO(iso);
       if (!d) return '';
@@ -3359,20 +3499,6 @@
       els.inputs.to.value = toRFC3339(now);
       state.previewTs = null;
       updateRangeLabel();
-    }
-
-    async function jumpToEdge(where) {
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const range = getEffectiveRange(params, pending);
-      const st = statusNormalize(state.model.status);
-      logUI(`jump button ${where} click status=${st} rangeValid=${range.valid}`);
-      if (!range.valid) {
-        log('Нет диапазона для перемещения', false);
-        return;
-      }
-      let target = where === 'end' ? range.to : range.from;
-      await seekOrPreview(target.toISOString().replace(/\.\d{3}Z$/, 'Z'));
     }
 
     async function seekOrPreview(ts) {

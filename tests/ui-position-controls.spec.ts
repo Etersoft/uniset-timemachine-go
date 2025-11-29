@@ -6,7 +6,7 @@ const parseTs = (value: string | null) => {
   return Number.isFinite(t) ? t : null;
 };
 
-test('position controls: seek via slider, jump start/end, current label', async ({ page }) => {
+test('position controls: seek via slider, current label', async ({ page }) => {
   await gotoWithSession(page);
 
   const statusBadge = page.locator('#statusBadge');
@@ -36,29 +36,6 @@ test('position controls: seek via slider, jump start/end, current label', async 
   await page.waitForTimeout(300); // даём UI обновить предпросмотр.
   const midTs = await currentLabel.textContent();
   expect(midTs).not.toBe('-');
-
-  // Jump to end.
-  const jumpEnd = page.locator('#jumpEndBtn');
-  await jumpEnd.click({ force: true });
-  await page.waitForTimeout(300);
-  const endTs = await currentLabel.textContent();
-  expect(endTs).not.toBe('-');
-  const endVal = parseTs(endTs);
-  const midVal = parseTs(midTs);
-  if (endVal !== null && midVal !== null) {
-    expect(endVal).toBeGreaterThanOrEqual(midVal);
-  }
-
-  // Jump to start.
-  const jumpStart = page.locator('#jumpStartBtn');
-  await jumpStart.click({ force: true });
-  await page.waitForTimeout(300);
-  const startTs = await currentLabel.textContent();
-  expect(startTs).not.toBe('-');
-  const startVal = parseTs(startTs);
-  if (startVal !== null && endVal !== null) {
-    expect(startVal).toBeLessThanOrEqual(endVal);
-  }
 
   // Стартуем воспроизведение и убеждаемся, что статус меняется, currentLabel обновляется.
   await page.request.post('/api/v2/job/start', { data: {} });

@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('player controls stay disabled until range is set', async ({ page }) => {
   // Сбрасываем состояние сервера, чтобы не было активной/отложенной задачи.
-  await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
+  await gotoWithSession(page, '/ui/', false, 'controls-disabled');
+  await page.request.post('/api/v2/job/reset').catch(() => {});
 
   const playBtn = page.locator('#playPauseBtn');
   const stopBtn = page.locator('#stopBtn');

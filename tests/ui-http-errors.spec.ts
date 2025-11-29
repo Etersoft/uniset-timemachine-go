@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('UI logs HTTP errors on refresh failure', async ({ page }) => {
   // Блокируем первый запрос к /api/v2/job с 500, чтобы init сработал в error-путь.
@@ -6,7 +7,7 @@ test('UI logs HTTP errors on refresh failure', async ({ page }) => {
     route.fulfill({ status: 500, body: 'boom' });
   });
 
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const logEntries = page.locator('#log .log-entry');
   await page.waitForFunction(

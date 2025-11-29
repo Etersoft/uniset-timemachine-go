@@ -151,6 +151,7 @@
       </div>
       <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end; min-width:320px;">
         <div class="status-line" style="justify-content:flex-end; gap:10px;">
+          <div id="controlLockChip" class="chip warn" style="display:none; background:#78350f; color:#fbbf24; border:1px solid #f59e0b;">Управление отключено</div>
           <div class="status-item"><span>Status</span><div id="chipStatus">idle</div></div>
           <div id="statusBadge" style="display:none;">idle</div>
           <div class="status-item"><span>Step</span><div id="statStep">-</div></div>
@@ -183,8 +184,12 @@
     <div class="card">
       <div class="row" style="gap:12px; align-items:flex-end; justify-content:space-between; flex-wrap:wrap;">
         <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-          <button id="workingLoadBtn" class="ghost" type="button" style="padding:8px 10px; min-width:120px; font-size:13px;">Загрузить</button>
+          <button id="workingLoadBtn" class="ghost" type="button" style="padding:6px 10px; min-width:120px; font-size:13px;">Загрузить</button>
           <div id="workingMeta" class="muted" style="font-size:13px;">Рабочий список датчиков: —</div>
+        </div>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+          <button id="claimControlBtn" class="ghost" type="button" style="display:none; padding:6px 10px; font-size:12px;">Забрать управление</button>
+          <div id="controlLockNotice" class="muted" style="display:none; color:#fbbf24; font-size:13px;">Управление недоступно: занято другой сессией</div>
         </div>
       </div>
       <div class="row wrap" style="gap:12px; align-items:flex-end; margin-top:6px;">
@@ -249,6 +254,9 @@
         <div class="row center" style="gap:8px;">
           <label class="checkbox-inline" style="color:#e5e7eb; font-size:12px;">
             <input type="checkbox" id="diagEnable" style="margin-right:4px; width:auto;"> Диагностика
+          </label>
+          <label class="checkbox-inline" style="color:#e5e7eb; font-size:12px;">
+            <input type="checkbox" id="diagNetEnable" style="margin-right:4px; width:auto;"> Логировать сетевой обмен
           </label>
           <button class="ghost" id="diagDownload" style="padding:6px 10px; font-size:12px;" disabled>Выгрузить</button>
           <button class="ghost" id="diagClear" style="padding:6px 10px; font-size:12px;" disabled>Очистить диагностику</button>
@@ -484,15 +492,33 @@
   function updateDiagButtons() {
     if (typeof els === 'undefined' || !els || !els.diagEnable) return;
     els.diagEnable.checked = !!state.diagEnabled;
+    if (els.diagNetEnable) els.diagNetEnable.checked = !!state.netLogEnabled;
     const has = diagBuffer.length > 0;
     if (els.diagDownload) els.diagDownload.disabled = !has;
     if (els.diagClear) els.diagClear.disabled = !has;
   }
   function pushDiag(line) {
-    if (!state.diagEnabled) return;
+    if (!state.diagEnabled && !state.netLogEnabled) return;
     diagBuffer.push(line);
     if (diagBuffer.length > diagLimit) diagBuffer.shift();
     updateDiagButtons();
+  }
+  function pushDiagAction(line) {
+    if (!state.diagEnabled) return;
+    pushDiag(line);
+  }
+  function pushDiagNet(line, { truncateForDiag = false } = {}) {
+    if (!state.diagEnabled && !state.netLogEnabled) return;
+    let msg = line;
+    if (!state.netLogEnabled && truncateForDiag) {
+      msg = truncate(line, 30);
+    }
+    pushDiag(msg);
+  }
+  function truncate(str, max = 30) {
+    if (!str) return '';
+    if (str.length <= max) return str;
+    return `${str.slice(0, max)}…`;
   }
   function downloadDiag() {
     if (!diagBuffer.length) return;
@@ -516,7 +542,7 @@
   const logUI = (msg, warn = false) => {
     const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
     if (logUIEnabled) console.info(`[UI LOG] ${msg}`);
-    pushDiag(line);
+    pushDiagAction(line);
   };
   const chartLogEnabled = true;
   const chartLog = (msg, payload) => {
@@ -526,10 +552,10 @@
     } else {
       console.info(`[chart] ${msg}`);
     }
-    pushDiag(`[${new Date().toLocaleTimeString()}] [chart] ${msg}${payload ? ' ' + JSON.stringify(payload).slice(0, 200) : ''}`);
+    pushDiagAction(`[${new Date().toLocaleTimeString()}] [chart] ${msg}${payload ? ' ' + JSON.stringify(payload).slice(0, 200) : ''}`);
   };
 
-    const els = {
+  const els = {
       inputs: {
         from: document.getElementById('from'),
         to: document.getElementById('to'),
@@ -541,6 +567,11 @@
       working: {
         btn: document.getElementById('workingLoadBtn'),
         meta: document.getElementById('workingMeta'),
+      },
+      controlLock: {
+        notice: document.getElementById('controlLockNotice'),
+        claim: document.getElementById('claimControlBtn'),
+        chip: document.getElementById('controlLockChip'),
       },
       brandContainer: document.getElementById('brandContainer'),
       brandClick: document.getElementById('brandEaster'),
@@ -576,6 +607,7 @@
       log: document.getElementById('log'),
       clearLog: document.getElementById('clearLogBtn'),
       diagEnable: document.getElementById('diagEnable'),
+      diagNetEnable: document.getElementById('diagNetEnable'),
       diagDownload: document.getElementById('diagDownload'),
       diagClear: document.getElementById('diagClear'),
       dialog: document.getElementById('datetimeDialog'),
@@ -664,11 +696,18 @@
       wsBytes: [],
       saveDirty: false,
       diagEnabled: false,
+      netLogEnabled: false,
       rangePicked: false,
       workingSensors: [],
       workingSet: new Set(),
       workingDefault: true,
       workingReady: false,
+      sessionToken: '',
+      isController: true,
+      controlLocked: false,
+      canClaim: false,
+      controllerPresent: false,
+      controlTimeoutSec: 0,
     };
 
     syncSaveToggle();
@@ -824,9 +863,9 @@
       const ids = (data?.sensors || []).map(Number).filter(Number.isFinite);
       const isDefault = !!data?.default;
       setWorkingLocal(ids.length ? ids : allSensorIds(), isDefault || !ids.length);
-      pushDiag(`[working] loaded count=${ids.length} default=${isDefault ? 'yes' : 'no'}`);
+      pushDiagAction(`[working] loaded count=${ids.length} default=${isDefault ? 'yes' : 'no'}`);
     } catch (err) {
-      pushDiag(`[working] load failed: ${err.message}`);
+      pushDiagAction(`[working] load failed: ${err.message}`);
       // Фолбэк: используем полный список, если он уже загружен.
       if (sensorIndex.byId.size) {
         setWorkingLocal(allSensorIds(), true);
@@ -846,7 +885,7 @@
     if (!uniq.length) {
       throw new Error('Нет валидных датчиков');
     }
-    pushDiag(`[working] apply ids=${uniq.length}`);
+    pushDiagAction(`[working] apply ids=${uniq.length}`);
     const data = await requestJSON('POST', '/api/v2/job/sensors', { sensors: uniq });
     const accepted = (data?.sensors || uniq).map(Number).filter(Number.isFinite);
     const isDefault = !!data?.default;
@@ -953,7 +992,7 @@
       while (els.log.children.length > 200) {
         els.log.removeChild(els.log.lastChild);
       }
-      pushDiag(`[${new Date().toLocaleTimeString()}] [log] ${message}`);
+      pushDiagAction(`[${new Date().toLocaleTimeString()}] [log] ${message}`);
     }
 
     function trackWsBytes(n) {
@@ -1059,6 +1098,16 @@
 
     function handleWSMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
+      if (msg.controller_present !== undefined) {
+        state.controllerPresent = !!msg.controller_present;
+      }
+      if (msg.control_timeout_sec !== undefined) {
+        state.controlTimeoutSec = Number(msg.control_timeout_sec) || state.controlTimeoutSec;
+      }
+      if (state.controllerPresent && !state.isController) {
+        state.controlLocked = true;
+      }
+      updateControlLockUI();
       const tsStr = msg.step_ts || unixToISO(msg.step_unix);
       if (msg.step_id !== undefined) {
         tableState.lastStep = msg.step_id || 0;
@@ -1076,7 +1125,7 @@
           preloadSensors().catch(() => {});
         }
         scheduleRenderTable(true);
-        pushDiag('[ws] reset');
+        pushDiagAction('[ws] reset');
           break;
         case 'snapshot':
           applySnapshot(msg.updates || [], tsStr);
@@ -1094,7 +1143,7 @@
 
     function applySnapshot(list, tsStr) {
       if (!Array.isArray(list)) return;
-      pushDiag(`[ws] snapshot rows=${list.length} ts=${tsStr || '-'}`);
+      pushDiagAction(`[ws] snapshot rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
@@ -1116,7 +1165,7 @@
   function applyTableUpdates(list, tsStr) {
     if (!Array.isArray(list)) return;
     const now = Date.now();
-      pushDiag(`[ws] updates rows=${list.length} ts=${tsStr || '-'}`);
+      pushDiagAction(`[ws] updates rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
         const key = Number(item.id);
         if (!Number.isFinite(key)) return;
@@ -1610,6 +1659,11 @@
         items.push({ id, name });
         availableCount++;
       });
+      if (!q) {
+        hideChartSuggestions();
+        updateChartInputState(availableCount);
+        return;
+      }
       items.sort((a, b) => a.name.localeCompare(b.name));
       const limited = items.slice(0, 50);
       if (!limited.length) {
@@ -2227,24 +2281,73 @@
     }
 
   function requestJSON(method, url, body) {
-    logUI(`fetch ${method} ${url} body=${body ? JSON.stringify(body) : ''}`);
+    const bodyStr = body !== undefined ? JSON.stringify(body) : '';
+    const stamp = new Date().toLocaleTimeString();
+    pushDiagNet(`[${stamp}] [fetch] ${method} ${url} body=${bodyStr}`, { truncateForDiag: true });
+    logUI(`fetch ${method} ${url} body=${bodyStr ? truncate(bodyStr, 200) : ''}`);
     const init = { method, headers: {} };
+    if (state.sessionToken) {
+      init.headers['X-TM-Session'] = state.sessionToken;
+    }
     if (body !== undefined) {
       init.headers['Content-Type'] = 'application/json';
-      init.body = JSON.stringify(body);
+      init.body = bodyStr;
     }
     return fetch(url, init).then(async (resp) => {
       const text = await resp.text();
       let payload = null;
       if (text) { try { payload = JSON.parse(text); } catch (_) {} }
-    logUI(`fetch result ${resp.status} ${resp.statusText} payload=${text || '<empty>'}`);
-      pushDiag(`[fetch] ${method} ${url} -> ${resp.status} ${resp.statusText} ${text || '<empty>'}`);
+      const respMsg = `[${new Date().toLocaleTimeString()}] [fetch] ${method} ${url} -> ${resp.status} ${resp.statusText} ${text || '<empty>'}`;
+      pushDiagNet(respMsg, { truncateForDiag: true });
+      logUI(`fetch result ${resp.status} ${resp.statusText} payload=${text ? truncate(text, 200) : '<empty>'}`);
       if (!resp.ok) {
+        if (resp.status === 403) {
+          state.controlLocked = true;
+          state.isController = false;
+          state.canClaim = false;
+          updateControls();
+        }
         throw new Error(payload?.error || text || `HTTP ${resp.status}`);
       }
       return payload;
     });
     }
+
+  async function initSession() {
+    let token = localStorage.getItem('tmSession') || '';
+    const headers = {};
+    if (token) headers['X-TM-Session'] = token;
+    try {
+      const resp = await fetch('/api/v2/session', { headers });
+      const data = await resp.json();
+      if (!resp.ok) {
+        throw new Error(data?.error || `HTTP ${resp.status}`);
+      }
+      token = data.session || token || '';
+      state.sessionToken = token;
+      if (token) {
+        localStorage.setItem('tmSession', token);
+      }
+      state.controlTimeoutSec = data.control_timeout_sec || 0;
+      state.controllerPresent = !!data.controller_present;
+      state.isController = !!data.is_controller || !state.controllerPresent;
+      state.canClaim = !!data.can_claim;
+      state.controlLocked = state.controllerPresent && !state.isController;
+      updateControlLockUI();
+      updateControls();
+    } catch (err) {
+      log(`Session init: ${err.message}`, false);
+    }
+  }
+
+  async function keepAlive() {
+    if (!state.sessionToken || !state.isController) return;
+    try {
+      await fetch('/api/v2/session?ping=1', { headers: { 'X-TM-Session': state.sessionToken } });
+    } catch (err) {
+      log(`Session ping: ${err.message}`, false);
+    }
+  }
 
   function mergeSensorsFromAPI(list) {
     if (!Array.isArray(list)) return;
@@ -2291,23 +2394,23 @@
 
   async function preloadSensors() {
       if (sensorIndex.hydrated) {
-        pushDiag('[sensors] skip preload: hydrated');
+        pushDiagAction('[sensors] skip preload: hydrated');
         return;
       }
       try {
-        pushDiag('[sensors] preload start');
+        pushDiagAction('[sensors] preload start');
         const data = await requestJSON('GET', '/api/v2/sensors');
         const list = data?.sensors || [];
         mergeSensorsFromAPI(list);
         sensorIndex.hydrated = list.length > 0;
-        pushDiag(`[sensors] loaded count=${list.length}`);
+        pushDiagAction(`[sensors] loaded count=${list.length}`);
         renderChartSuggestions(els.charts.sensors?.value || '');
         if (chartState.selected.length) {
           rebuildChart(true);
         }
       } catch (err) {
         logUI(`[chart] preload sensors failed: ${err.message}`);
-        pushDiag(`[sensors] preload failed: ${err.message}`);
+        pushDiagAction(`[sensors] preload failed: ${err.message}`);
       }
     }
 
@@ -2515,6 +2618,7 @@
       const range = getEffectiveRange(params, pending);
       const pendingRange = !!(pending?.range_set || pending?.RangeSet);
       const hasWorking = state.workingReady && state.workingSensors.length > 0;
+      const readOnly = !!state.controlLocked;
       const active = hasWorking && (st === 'running' || st === 'paused' || st === 'stopping');
       const paused = st === 'paused';
       const curTs = currentTsFromServer();
@@ -2523,29 +2627,38 @@
       const canStep = hasWorking && range.valid && st !== 'failed' && st !== 'running' && st !== 'stopping';
       const runningLike = st === 'running' || st === 'stopping';
 
-      setDisabled(els.controls.stepBack, !canStep || atStart);
-      setDisabled(els.controls.stepFwd, !canStep || atEnd);
-      setDisabled(els.controls.stop, !active);
+      setDisabled(els.controls.stepBack, readOnly || !canStep || atStart);
+      setDisabled(els.controls.stepFwd, readOnly || !canStep || atEnd);
+      setDisabled(els.controls.stop, readOnly || !active);
       const hasRange = range.valid && (active || pendingRange || state.rangePicked); // диапазон считаем заданным если активен, есть pending или пользователь выбрал его в этой сессии
-      setDisabled(els.controls.playPause, st === 'failed' || !hasRange || !hasWorking);
+      setDisabled(els.controls.playPause, readOnly || st === 'failed' || !hasRange || !hasWorking);
       const playLike = paused || st === 'idle' || st === 'done' || st === 'pending';
       els.controls.playPause.textContent = playLike ? '▶️ Play' : '⏸ Pause';
       els.controls.playPause.classList.remove('primary');
       // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
-      setDisabled(els.timeline, !range.valid || !hasWorking);
+      setDisabled(els.timeline, readOnly || !range.valid || !hasWorking);
       if (els.rangeBtn) {
-        setDisabled(els.rangeBtn, active); // не трогаем диапазон во время активной задачи
+        setDisabled(els.rangeBtn, readOnly || active); // не трогаем диапазон во время активной задачи
       }
       if (els.controls.jumpStart) {
-        setDisabled(els.controls.jumpStart, !hasWorking || !range.valid || st === 'running' || st === 'stopping');
+        setDisabled(els.controls.jumpStart, readOnly || !hasWorking || !range.valid || st === 'running' || st === 'stopping');
       }
       if (els.controls.jumpEnd) {
-        setDisabled(els.controls.jumpEnd, !hasWorking || !range.valid || st === 'running' || st === 'stopping');
+        setDisabled(els.controls.jumpEnd, readOnly || !hasWorking || !range.valid || st === 'running' || st === 'stopping');
       }
       if (els.inputs.saveToSM) {
         const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
-        setDisabled(els.inputs.saveToSM, runningLike || !allowed);
+        setDisabled(els.inputs.saveToSM, readOnly || runningLike || !allowed);
       }
+      setDisabled(els.inputs.from, readOnly);
+      setDisabled(els.inputs.to, readOnly);
+      setDisabled(els.inputs.step, readOnly);
+      setDisabled(els.inputs.speed, readOnly);
+      setDisabled(els.inputs.window, readOnly);
+      if (els.working?.btn) {
+        setDisabled(els.working.btn, readOnly);
+      }
+      updateControlLockUI();
       updateWorkingMeta();
     }
 
@@ -2557,6 +2670,25 @@
       else el.classList.remove('is-disabled');
     }
 
+    function updateControlLockUI() {
+      const locked = !!state.controlLocked;
+      if (els.controlLock?.notice) {
+        els.controlLock.notice.style.display = locked ? 'block' : 'none';
+      }
+      if (els.controlLock?.claim) {
+        const showClaim = locked && state.canClaim;
+        els.controlLock.claim.style.display = showClaim ? 'inline-flex' : 'none';
+      }
+      if (els.controlLock?.chip) {
+        els.controlLock.chip.style.display = locked ? 'inline-flex' : 'none';
+        if (locked && state.controlTimeoutSec) {
+          els.controlLock.chip.textContent = `Управление отключено · автоотдача через ${state.controlTimeoutSec}s`;
+        } else {
+          els.controlLock.chip.textContent = 'Управление отключено';
+        }
+      }
+    }
+
     const originalBrandHTML = `<span id="brandEaster" class="brand-click">TimeMachine</span> · Player · v2`;
     let easterTimer = null;
     function triggerEaster() {
@@ -2566,7 +2698,7 @@
       target.classList.remove('brand-fadein', 'brand-fadeout');
       target.classList.add('brand-fadeout');
       setTimeout(() => {
-        target.innerHTML = `<span class="easter show run"><span class="shine"></span><span>..прошлое невозможно вернуть, но его можно увидеть..</span></span>`;
+        target.innerHTML = `<span class="easter show run"><span class="shine"></span><span>прошлое невозможно вернуть, но его можно увидеть..</span></span>`;
         target.classList.remove('brand-fadeout');
         target.classList.add('brand-fadein');
       }, 320);
@@ -2640,7 +2772,7 @@
       logUI(`refresh ${full ? 'full' : 'state'} start last_ts=${state.model.last_ts || state.model.LastTS}`);
       const data = await requestJSON('GET', url);
       const status = statusNormalize(data?.status || data?.Status || state.model.status);
-      pushDiag(`[refresh] ${full ? 'full' : 'state'} status=${status} step=${data?.step_id ?? data?.StepID ?? '-'} ts=${data?.last_ts ?? data?.LastTS ?? '-'}`);
+      pushDiagAction(`[refresh] ${full ? 'full' : 'state'} status=${status} step=${data?.step_id ?? data?.StepID ?? '-'} ts=${data?.last_ts ?? data?.LastTS ?? '-'}`);
       const pending = data?.pending || data?.Pending || {};
       state.model = { ...data, status, pending };
       // Если нет активных params, но есть pending range — используем его для отображения.
@@ -2687,7 +2819,7 @@
       await fetchSensorCount(payload.from, payload.to);
       logUI('startJob (v2) using pending');
       try {
-        pushDiag('[action] start');
+        pushDiagAction('[action] start');
         await requestJSON('POST', '/api/v2/job/start', { save_output: payload.save_output });
         log('Старт отправлен');
         await refresh(true);
@@ -2697,6 +2829,20 @@
     }
 
     function bindActions() {
+      if (els.controlLock?.claim) {
+        els.controlLock.claim.addEventListener('click', async () => {
+          try {
+            await requestJSON('POST', '/api/v2/session/claim');
+            state.isController = true;
+            state.controlLocked = false;
+            state.canClaim = false;
+            updateControls();
+            log('Управление передано этой сессии');
+          } catch (err) {
+            log(`Claim failed: ${err.message}`, false);
+          }
+        });
+      }
       els.tabs.forEach(btn => {
         btn.addEventListener('click', () => setTab(btn.dataset.tab));
       });
@@ -2947,12 +3093,21 @@
       if (els.diagEnable) {
         els.diagEnable.addEventListener('change', () => {
           state.diagEnabled = !!els.diagEnable.checked;
-          if (!state.diagEnabled) {
+          if (!state.diagEnabled && !state.netLogEnabled) {
             diagBuffer.length = 0;
           } else if (!sensorIndex.hydrated) {
             preloadSensors().catch(() => {});
           }
           logUI(`Диагностика ${state.diagEnabled ? 'включена' : 'выключена'}`);
+          updateDiagButtons();
+        });
+      }
+      if (els.diagNetEnable) {
+        els.diagNetEnable.addEventListener('change', () => {
+          state.netLogEnabled = !!els.diagNetEnable.checked;
+          if (!state.diagEnabled && !state.netLogEnabled) {
+            diagBuffer.length = 0;
+          }
           updateDiagButtons();
         });
       }
@@ -3337,6 +3492,9 @@
       setInterval(async () => {
         try {
           await refresh(false);
+          if (state.isController) {
+            await keepAlive();
+          }
           state.pollErrorNotified = false;
         } catch (err) {
           if (!state.pollErrorNotified) {
@@ -3360,6 +3518,7 @@
     updateWorkingMeta();
 
     (async () => {
+      await initSession();
       await preloadSensors().catch(() => {});
       await loadWorkingSensors().catch(() => {});
       startPolling();

@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('range → play → stop', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   // Запросить доступный диапазон напрямую через API и применить его.
   const rangeResp = await page.request.get('/api/v2/job/range');

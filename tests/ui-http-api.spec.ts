@@ -1,8 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession, claimControl } from './utils';
 
 test('front-end issues HTTP requests on load and start/stop', async ({ page }) => {
+  await gotoWithSession(page);
+  // Подстрахуемся, что управление у нас (если предыдущий тест оставил контроллер).
+  await claimControl(page, 10, 700);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
     await page.evaluate(

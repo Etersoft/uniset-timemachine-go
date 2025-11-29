@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('working sensors: select existing, reset to all, load from text', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
 
   // Получаем справочник и полный список для проверок.

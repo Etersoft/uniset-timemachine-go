@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"time"
+	"github.com/google/uuid"
 
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 )
@@ -93,6 +94,8 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		path    string
 		handler http.Handler
 	}{
+		{"/api/v2/session", http.HandlerFunc(s.handleSession)},
+		{"/api/v2/session/claim", http.HandlerFunc(s.handleSessionClaim)},
 		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
 		{"/api/v2/job/sensors", http.HandlerFunc(s.handleJobSensors)},
 		{"/api/v2/job/sensors/count", http.HandlerFunc(s.handleSensorCount)},
@@ -115,9 +118,67 @@ func (s *Server) routes(uiFS http.FileSystem) {
 	}
 }
 
+func (s *Server) sessionTokenFromRequest(r *http.Request) string {
+	if token := r.Header.Get("X-TM-Session"); token != "" {
+		return token
+	}
+	if token := r.URL.Query().Get("session"); token != "" {
+		return token
+	}
+	return ""
+}
+
+func (s *Server) requireController(w http.ResponseWriter, r *http.Request) (string, bool) {
+	token := s.sessionTokenFromRequest(r)
+	if err := s.manager.RequireControl(token); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return "", false
+	}
+	return token, true
+}
+
+func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method %s not allowed", r.Method))
+		return
+	}
+	// Keepalive ping ?ping=1
+	if r.URL.Query().Get("ping") != "" {
+		token := s.sessionTokenFromRequest(r)
+		if err := s.manager.KeepAlive(token); err != nil {
+			writeError(w, http.StatusForbidden, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+	token := s.sessionTokenFromRequest(r)
+	if token == "" {
+		token = uuid.NewString()
+	}
+	status := s.manager.SessionStatus(token)
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleSessionClaim(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method %s not allowed", r.Method))
+		return
+	}
+	token := s.sessionTokenFromRequest(r)
+	if err := s.manager.ClaimControl(token); err != nil {
+		writeError(w, http.StatusForbidden, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "is_controller": true})
+}
+
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodPost:
+		if _, ok := s.requireController(w, r); !ok {
+			return
+		}
 		var req startRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -206,6 +267,9 @@ func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
 			"default": defaultSet,
 		})
 	case http.MethodPost:
+		if _, ok := s.requireController(w, r); !ok {
+			return
+		}
 		var req jobSensorsRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -261,6 +325,9 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, http.StatusOK, respMap)
 	case http.MethodPost:
+		if _, ok := s.requireController(w, r); !ok {
+			return
+		}
 		var req startRequest
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, err)
@@ -306,6 +373,9 @@ func (s *Server) handleSetSeek(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requireController(w, r); !ok {
+		return
+	}
 	var req seekRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -336,6 +406,9 @@ func (s *Server) handleResume(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requireController(w, r); !ok {
+		return
+	}
 	var req resumeRequest
 	_ = decodeJSON(r, &req) // тело может быть пустым
 	logDebugf("[http] command resume save_output=%v", req.SaveOutput)
@@ -358,6 +431,9 @@ func (s *Server) handleStartPending(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requireController(w, r); !ok {
+		return
+	}
 	if err := s.manager.StartPending(r.Context()); err != nil {
 		code := http.StatusBadRequest
 		if err.Error() == "job is already active" {
@@ -373,6 +449,9 @@ func (s *Server) handleStartPending(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStepBackward(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireController(w, r); !ok {
 		return
 	}
 	var req applyRequest
@@ -391,6 +470,9 @@ func (s *Server) handleStepBackward(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSeek(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.requireController(w, r); !ok {
 		return
 	}
 	var req seekRequest
@@ -494,6 +576,9 @@ func (s *Server) wrapSimple(fn func() error) http.HandlerFunc {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		if _, ok := s.requireController(w, r); !ok {
+			return
+		}
 		if err := fn(); err != nil {
 			if errors.Is(err, replay.ErrStopped{}) {
 				writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -511,6 +596,9 @@ func (s *Server) handleReset(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if _, ok := s.requireController(w, r); !ok {
+		return
+	}
 	logDebugf("[http] reset requested")
 	clone := s.manager.SensorsInfo()
 	s.manager.Reset()
@@ -524,6 +612,9 @@ func (s *Server) wrapSimpleWithLog(label string, fn func() error) http.HandlerFu
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if _, ok := s.requireController(w, r); !ok {
 			return
 		}
 		logDebugf("[http] command %s", label)
@@ -542,7 +633,7 @@ func (s *Server) wrapSimpleWithLog(label string, fn func() error) http.HandlerFu
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-TM-Session")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

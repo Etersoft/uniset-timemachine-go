@@ -14,6 +14,11 @@ import (
 	"sort"
 )
 
+var (
+	errControlLocked   = errors.New("control is locked by another session")
+	errSessionRequired = errors.New("session token is required")
+)
+
 // Manager отвечает за одну задачу воспроизведения и её управление.
 type Manager struct {
 	mu sync.Mutex
@@ -27,6 +32,10 @@ type Manager struct {
 	streamer       *StateStreamer
 	sensorInfo     map[int64]SensorInfo
 	pending        pendingState
+	// Управляющая сессия
+	controllerSession string
+	controllerLastSeen time.Time
+	controlTimeout     time.Duration
 }
 
 type defaults struct {
@@ -56,8 +65,24 @@ type job struct {
 	commands    chan replay.Command
 }
 
+type SessionStatus struct {
+	Session            string `json:"session"`
+	IsController       bool   `json:"is_controller"`
+	ControllerPresent  bool   `json:"controller_present"`
+	ControllerAgeSec   int64  `json:"controller_age_sec"`
+	ControlTimeoutSec  int64  `json:"control_timeout_sec"`
+	CanClaim           bool   `json:"can_claim"`
+}
+
+// ControlStatus возвращает наличие контроллера и таймаут (секунды).
+func (m *Manager) ControlStatus() (present bool, timeoutSec int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.controllerSession != "", int(m.controlTimeout.Seconds())
+}
+
 // NewManager создаёт менеджер с заданным сервисом и списком датчиков.
-func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer, saveAllowed bool, defaultSave bool) *Manager {
+func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer, saveAllowed bool, defaultSave bool, controlTimeout time.Duration) *Manager {
 	metaIDs := sensors
 	if cfg != nil && len(cfg.Sensors) > 0 {
 		metaIDs = allSensorIDs(cfg)
@@ -77,13 +102,112 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 			saveAllowed: saveAllowed,
 			saveOutput:  saveAllowed && defaultSave,
 		},
-		streamer:   streamer,
-		sensorInfo: info,
+		streamer:        streamer,
+		sensorInfo:      info,
+		controlTimeout:  controlTimeout,
+		controllerLastSeen: time.Time{},
 	}
 	if m.streamer != nil {
 		m.streamer.Reset(info)
 	}
 	return m
+}
+
+// RequireControl гарантирует, что токен принадлежит активной сессии.
+// Если контроллер отсутствует, закрепляет токен как контроллера.
+func (m *Manager) RequireControl(token string) error {
+	if token == "" {
+		return errSessionRequired
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.controllerSession == "" {
+		m.controllerSession = token
+		m.controllerLastSeen = now
+		return nil
+	}
+	if token == m.controllerSession {
+		m.controllerLastSeen = now
+		return nil
+	}
+	// Есть другой контроллер.
+	if m.controlTimeout > 0 && now.Sub(m.controllerLastSeen) > m.controlTimeout {
+		// Истекла, но нужен явный claim.
+		return fmt.Errorf("%w (stale; claim required)", errControlLocked)
+	}
+	return errControlLocked
+}
+
+// ClaimControl пытается перехватить управление для токена, если контроллер отсутствует или просрочен.
+func (m *Manager) ClaimControl(token string) error {
+	if token == "" {
+		return errSessionRequired
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.controllerSession == "" || m.controllerSession == token {
+		m.controllerSession = token
+		m.controllerLastSeen = now
+		return nil
+	}
+	if m.controlTimeout == 0 {
+		return errControlLocked
+	}
+	if now.Sub(m.controllerLastSeen) <= m.controlTimeout {
+		return errControlLocked
+	}
+	m.controllerSession = token
+	m.controllerLastSeen = now
+	return nil
+}
+
+// SessionStatus возвращает информацию о текущем контроллере и возможности захвата.
+func (m *Manager) SessionStatus(token string) SessionStatus {
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var age int64
+	if !m.controllerLastSeen.IsZero() {
+		age = int64(now.Sub(m.controllerLastSeen).Seconds())
+	}
+	isCtrl := token != "" && token == m.controllerSession
+	timeoutSec := int64(m.controlTimeout.Seconds())
+	canClaim := false
+	if m.controlTimeout > 0 {
+		if m.controllerSession == "" || now.Sub(m.controllerLastSeen) > m.controlTimeout {
+			canClaim = true
+		}
+	}
+	return SessionStatus{
+		Session:           token,
+		IsController:      isCtrl,
+		ControllerPresent: m.controllerSession != "",
+		ControllerAgeSec:  age,
+		ControlTimeoutSec: timeoutSec,
+		CanClaim:          canClaim,
+	}
+}
+
+// KeepAlive обновляет lastSeen для текущего контроллера (не меняя владельца).
+func (m *Manager) KeepAlive(token string) error {
+	if token == "" {
+		return errSessionRequired
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.controllerSession == "" {
+		return errControlLocked
+	}
+	if token != m.controllerSession {
+		return errControlLocked
+	}
+	m.controllerLastSeen = now
+	return nil
 }
 
 // Reset сбрасывает состояние задачи и pending.
@@ -97,14 +221,6 @@ func (m *Manager) Reset() {
 	m.pending = pendingState{}
 	if len(m.defaultSensors) > 0 {
 		m.sensors = append([]int64(nil), m.defaultSensors...)
-	}
-	// Обновляем streamer новым слепком сенсоров, чтобы клиенты получили reset.
-	if m.streamer != nil {
-		clone := make(map[int64]SensorInfo, len(m.sensorInfo))
-		for id, info := range m.sensorInfo {
-			clone[id] = info
-		}
-		m.streamer.Reset(clone)
 	}
 	m.mu.Unlock()
 }
@@ -207,8 +323,13 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 		SaveOutput: save,
 	}
 
-	if m.streamer != nil {
-		m.streamer.Reset(m.sensorInfo)
+	var streamReset map[int64]SensorInfo
+	streamer := m.streamer
+	if streamer != nil {
+		streamReset = make(map[int64]SensorInfo, len(m.sensorInfo))
+		for id, info := range m.sensorInfo {
+			streamReset[id] = info
+		}
 	}
 
 	// Держим задачу на фоновом контексте, чтобы она не завершалась сразу после ответа HTTP-хендлера.
@@ -224,6 +345,10 @@ func (m *Manager) Start(_ context.Context, from, to time.Time, step time.Duratio
 	// очищаем pending после старта
 	m.pending = pendingState{}
 	m.mu.Unlock()
+
+	if streamer != nil {
+		streamer.Reset(streamReset)
+	}
 
 	go func() {
 		err := m.service.RunWithControl(jobCtx, params, replay.Control{

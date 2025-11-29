@@ -23,6 +23,10 @@ go run ./cmd/timemachine \
   - API допускает CORS с `Access-Control-Allow-Origin: *`, поэтому `/ui/` можно открывать даже с `file://` или с отдельного домена; предзапросы `OPTIONS` поддерживаются.
 - `GET /api/v2/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`. Без upgrade вернёт `400/426`, а при отсутствующем streamer — `503`.
 - `/debug/pprof/*` — стандартные endpoint’ы pprof для съёма профилей (CPU/heap/trace) во время работы.
+- Управление требует сессионного заголовка `X-TM-Session`. Работа сессий:
+  - `GET /api/v2/session` — выдаёт/подтверждает токен, возвращает `session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`. Параметр `ping=1` обновляет `last_seen` для текущего контроллера.
+  - `POST /api/v2/session/claim` — “забрать управление”, срабатывает если контроллер пуст или просрочен (таймаут задаётся флагом `--control-timeout`, `0` — не отдавать).
+  - Управляющие эндпоинты (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) возвращают `403 control locked`, если токен не совпадает с активной сессией.
 
 ### API v2 (pending range/seek, рабочий список)
 

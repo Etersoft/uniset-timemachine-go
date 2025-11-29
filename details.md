@@ -22,6 +22,9 @@
 - `POST /api/v2/job/range` — подготовка диапазона без старта. Body: `from`, `to` (RFC3339), `step` (duration), `speed` (float, опционально), `window` (duration, опционально), `save_output` (bool).
 - `POST /api/v2/job/start` — запуск ранее подготовленного диапазона. Опционально `save_output`.
 - `POST /api/v2/job/reset` — остановка активной задачи (если была), очистка pending range/seek и отправка события `reset` в WebSocket.
+- `GET /api/v2/session` — сессионный токен управления (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`). Параметр `ping=1` — keepalive контроллера.
+- `POST /api/v2/session/claim` — “забрать управление” при пустом/просроченном контроллере (таймаут `--control-timeout`, `0` — не отдавать).
+- Управляющие запросы (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) требуют заголовок `X-TM-Session` и вернут `403 control locked` при чужом токене.
 - `POST /api/v2/job/pause` — перевод в `paused`.
 - `POST /api/v2/job/resume` — продолжение с теми же шагом/скоростью (использует pending seek, если был).
 - `POST /api/v2/job/stop` — мягкая остановка задачи.
@@ -31,7 +34,7 @@
 - `POST /api/v2/job/step/backward` — шаг назад с восстановлением состояния из кеша, остаётся `paused`.
 - `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне.
 - `POST /api/v2/snapshot` — одноразовый расчёт состояния на `ts` (RFC3339, опц. `slist`); не влияет на активную задачу и не пишет в SM.
-- `GET /api/v2/ws/state` — WebSocket со снапшотом и дальнейшими обновлениями: типы сообщений `snapshot|updates|reset`, поля `step_id`, `step_ts`, `step_unix`, `updates` или компактное `u` (`[id,value,has]`), плюс метаданные датчиков в снапшоте. Без upgrade вернёт `400/426`, без streamer — `503`.
+- `GET /api/v2/ws/state` — WebSocket со снапшотом и дальнейшими обновлениями: типы сообщений `snapshot|updates|reset`, поля `step_id`, `step_ts`, `step_unix`, `updates` или компактное `u` (`[id,value,has]`), плюс метаданные датчиков в снапшоте. Сообщения также несут `controller_present` и `control_timeout_sec` (если настроен таймаут), чтобы UI сразу реагировал на смену управляющей сессии. Без upgrade вернёт `400/426`, без streamer — `503`.
 - Семантика шага назад: кеш снапшотов (`stateCache`) + догонка событий; при промахе пересборка через `BuildState`, после чего остаётся в `paused`.
 - Команды работают через контрольный канал `replay.Service`; `step`/`seek`/`apply` не запускают потоковое воспроизведение.
 

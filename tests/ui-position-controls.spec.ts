@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 const parseTs = (value: string | null) => {
   const t = new Date(value || '').getTime();
@@ -6,7 +7,7 @@ const parseTs = (value: string | null) => {
 };
 
 test('position controls: seek via slider, jump start/end, current label', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const statusBadge = page.locator('#statusBadge');
   const timeline = page.locator('#timeline');

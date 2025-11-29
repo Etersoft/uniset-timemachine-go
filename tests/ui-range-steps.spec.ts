@@ -1,10 +1,11 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 // Range -> FWD -> FWD -> Play -> Pause -> Backward -> Backward -> Play -> Stop
 // -> To Begin -> Play -> Stop -> To End -> Bwd -> Bwd -> Play -> Stop (or finish)
 test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
-  test.setTimeout(60_000);
-  await page.goto('/ui/');
+  test.setTimeout(10_000);
+  await gotoWithSession(page);
 
   const statusBadge = page.locator('#statusBadge');
 
@@ -21,7 +22,7 @@ test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
     },
   });
 
-  const waitStatus = async (re: RegExp, timeout = 20_000) => {
+  const waitStatus = async (re: RegExp, timeout = 5_000) => {
     await expect(statusBadge).toHaveText(re, { timeout });
   };
   const nap = (ms = 150) => page.waitForTimeout(ms);

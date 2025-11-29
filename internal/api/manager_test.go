@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -24,7 +25,7 @@ func newTestManager(t *testing.T) *Manager {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	return NewManager(svc, []int64{1, 2}, nil, 1000, step, 8, nil, true, false)
+	return NewManager(svc, []int64{1, 2}, nil, 1000, step, 8, nil, true, false, 0)
 }
 
 func TestManagerStartConflictAndStop(t *testing.T) {
@@ -120,7 +121,7 @@ func TestManagerPlaybackFlowScenario(t *testing.T) {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	mgr := NewManager(svc, []int64{1}, nil, 2.0, step, 8, nil, true, false)
+	mgr := NewManager(svc, []int64{1}, nil, 2.0, step, 8, nil, true, false, 0)
 
 	mgr.SetRange(from, to, step, 2.0, time.Second, true)
 	seekStart := from.Add(2 * step)
@@ -221,7 +222,7 @@ func TestManagerSeekApplyPaused(t *testing.T) {
 	var capClient captureClient
 	client := &capClient
 	svc := replay.Service{Storage: store, Output: client}
-	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false)
+	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false, 0)
 
 	if err := mgr.Start(context.Background(), from, to, step, 1, step, true); err != nil {
 		t.Fatalf("start: %v", err)
@@ -242,6 +243,54 @@ func TestManagerSeekApplyPaused(t *testing.T) {
 	_ = mgr.Stop()
 }
 
+func TestManagerControlRequireClaimKeepAlive(t *testing.T) {
+	timeout := 200 * time.Millisecond
+	m := NewManager(
+		replay.Service{Storage: &apiTestStorage{}, Output: &apiTestClient{}},
+		[]int64{1}, nil, 1, time.Second, 16, nil, true, false, timeout,
+	)
+
+	// Пустой токен.
+	if err := m.RequireControl(""); err != errSessionRequired {
+		t.Fatalf("empty token err = %v, want errSessionRequired", err)
+	}
+
+	tokenA := "a"
+	tokenB := "b"
+
+	// Первый требует контроль.
+	if err := m.RequireControl(tokenA); err != nil {
+		t.Fatalf("require A err = %v", err)
+	}
+
+	// Второй блокируется.
+	if err := m.RequireControl(tokenB); err == nil || !errors.Is(err, errControlLocked) {
+		t.Fatalf("require B want errControlLocked, got %v", err)
+	}
+
+	// KeepAlive продлевает.
+	time.Sleep(timeout / 2)
+	if err := m.KeepAlive(tokenA); err != nil {
+		t.Fatalf("keepalive A err = %v", err)
+	}
+
+	// Claim преждевременно не даёт.
+	if err := m.ClaimControl(tokenB); err == nil {
+		t.Fatalf("claim B should fail while not stale")
+	}
+
+	// Ждём истечения таймаута и Claim успешен.
+	time.Sleep(timeout + 50*time.Millisecond)
+	if err := m.ClaimControl(tokenB); err != nil {
+		t.Fatalf("claim B after stale err = %v", err)
+	}
+
+	// Теперь RequireControl от A должен вернуть lock.
+	if err := m.RequireControl(tokenA); err == nil || !errors.Is(err, errControlLocked) {
+		t.Fatalf("require A after claim want errControlLocked, got %v", err)
+	}
+}
+
 func TestManagerStepBackwardApplyPaused(t *testing.T) {
 	from := time.Date(2024, 6, 1, 0, 0, 0, 0, time.UTC)
 	step := time.Second
@@ -251,7 +300,7 @@ func TestManagerStepBackwardApplyPaused(t *testing.T) {
 	var capClient captureClient
 	client := &capClient
 	svc := replay.Service{Storage: store, Output: client}
-	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false)
+	mgr := NewManager(svc, []int64{1}, nil, 1, step, 8, nil, true, false, 0)
 
 	if err := mgr.Start(context.Background(), from, to, step, 1, step, true); err != nil {
 		t.Fatalf("start: %v", err)
@@ -335,7 +384,7 @@ func TestManagerDefaultsApplied(t *testing.T) {
 		Storage: store,
 		Output:  &sharedmem.StdoutClient{Writer: io.Discard},
 	}
-	mgr := NewManager(svc, []int64{1}, nil, 0, 0, 4, nil, false, false)
+	mgr := NewManager(svc, []int64{1}, nil, 0, 0, 4, nil, false, false, 0)
 	if err := mgr.Start(context.Background(), from, to, step, 0, 0, true); err != nil {
 		t.Fatalf("start with defaults: %v", err)
 	}

@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('step / speed / cache / save-to-sm controls are applied on start', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   // Установим рабочий список датчиков (на случай если UI не успел загрузить).
   const sensorsResp = await page.request.get('/api/v2/sensors');

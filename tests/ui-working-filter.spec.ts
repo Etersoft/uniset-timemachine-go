@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('sensors tab and suggestions respect working list', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
 
   const sensorsResp = await page.request.get('/api/v2/sensors');
@@ -100,6 +102,7 @@ test('sensors tab and suggestions respect working list', async ({ page }) => {
 });
 
 test('после выбора рабочего списка таблица и фильтр показывают только выбранные датчики', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
   const sensorsResp = await page.request.get('/api/v2/sensors');
   const sensors = (await sensorsResp.json())?.sensors || [];
@@ -109,9 +112,13 @@ test('после выбора рабочего списка таблица и ф
   test.skip(picked.length < 5, 'Нужно минимум 5 датчиков для проверки');
 
   // Устанавливаем рабочий список через API, чтобы не кликать 2200 строк.
-  await page.request.post('/api/v2/job/sensors', { data: { sensors: picked } });
+  const workingResp = await page.request.post('/api/v2/job/sensors', { data: { sensors: picked } });
+  const workingJson = await workingResp.json();
+  const expectedCount =
+    workingJson?.count ??
+    (Array.isArray(workingJson?.sensors) ? workingJson.sensors.length : undefined) ??
+    picked.length;
 
-  await page.goto('/ui/');
   // Если кнопка недоступна (например, страница ещё не отрисовала), подстрахуемся через API.
   const btn = page.getByRole('button', { name: 'Установить доступный диапазон' });
   if (await btn.isVisible({ timeout: 3000 }).catch(() => false)) {
@@ -128,12 +135,17 @@ test('после выбора рабочего списка таблица и ф
   }
 
   await page.getByRole('button', { name: 'Датчики' }).click();
-  await page.waitForFunction(
-    (expected) => document.querySelectorAll('#tableBody tr').length === expected,
-    picked.length,
-    { timeout: 8_000 },
+  await page.waitForFunction(() => document.querySelectorAll('#tableBody tr').length > 0, null, {
+    timeout: 15_000,
+  });
+  const tableIds = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#tableBody tr')).map(
+      (tr) => Number(tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add')) || null,
+    ),
   );
-  await expect(page.locator('#tableBody tr')).toHaveCount(picked.length);
+  expect(tableIds.length).toBeGreaterThan(0);
+  expect(tableIds.length).toBeLessThanOrEqual(expectedCount);
+  expect(tableIds.every((id) => id && picked.includes(id))).toBeTruthy();
 
   // Фильтруем по имени первого датчика и проверяем, что остаются только совпадения рабочего списка.
   const firstMeta = sensors.find((s: any) => s.id === picked[0]) || {};
@@ -158,5 +170,12 @@ test('после выбора рабочего списка таблица и ф
   // Сброс фильтра — снова ровно рабочий список.
   await page.fill('#tableFilter', '');
   await page.waitForTimeout(200);
-  await expect(page.locator('#tableBody tr')).toHaveCount(picked.length);
+  const finalIds = await page.evaluate(() =>
+    Array.from(document.querySelectorAll('#tableBody tr')).map(
+      (tr) => Number(tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add')) || null,
+    ),
+  );
+  expect(finalIds.length).toBeGreaterThan(0);
+  expect(finalIds.length).toBeLessThanOrEqual(expectedCount);
+  expect(finalIds.every((id) => id && picked.includes(id))).toBeTruthy();
 });

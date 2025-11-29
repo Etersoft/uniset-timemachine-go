@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('range dialog elements and apply flow', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const dlg = page.locator('#rangeDialog');
   const dlgFrom = page.locator('#rangeDialogFrom');

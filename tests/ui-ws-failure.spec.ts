@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('ws indicator switches to warn on disconnect', async ({ page, context }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
     await page.evaluate(

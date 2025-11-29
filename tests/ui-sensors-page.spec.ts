@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('table filter and add-to-chart from Sensors tab', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   // Установим рабочий список датчиков заранее.
   const sensorsResp1 = await page.request.get('/api/v2/sensors');

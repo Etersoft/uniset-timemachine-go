@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 // Проверяем, что после Stop кнопка Play остаётся доступной при заданном диапазоне.
 test('play is enabled after stop when range is set', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   // Получаем доступный диапазон и применяем его через API.
   const rangeResp = await page.request.get('/api/v2/job/range');

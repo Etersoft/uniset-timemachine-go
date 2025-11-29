@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('AI/AO идут на основной график, DI/DO — на дискретный; unknown — на основной', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
   const sensorsResp = await page.request.get('/api/v2/sensors');
   const sensorsJson = await sensorsResp.json();

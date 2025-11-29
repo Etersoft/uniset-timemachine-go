@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('websocket indicator and speed updates when playing', async ({ page }) => {
+  await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
-  await page.goto('/ui/');
 
   const setValue = async (selector: string, value: string) => {
     await page.evaluate(

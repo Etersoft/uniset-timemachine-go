@@ -16,6 +16,8 @@ import (
 	"github.com/pv/uniset-timemachine-go/internal/storage"
 )
 
+const testSessionToken = "test-session"
+
 type apiTestStorage struct{}
 
 func (s *apiTestStorage) Warmup(context.Context, []int64, time.Time) ([]storage.SensorEvent, error) {
@@ -53,7 +55,27 @@ func newTestServer(t *testing.T) (*httptest.Server, *Manager) {
 		Storage: &apiTestStorage{},
 		Output:  &apiTestClient{},
 	}
-	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false)
+	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false, 0)
+	srv := NewServer(mgr, nil)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skip: tcp listen not permitted: %v", err)
+	}
+	testSrv := httptest.NewUnstartedServer(srv.mux)
+	testSrv.Listener = ln
+	testSrv.Start()
+	t.Cleanup(testSrv.Close)
+	return testSrv, mgr
+}
+
+func newTestServerWithTimeout(t *testing.T, timeout time.Duration) (*httptest.Server, *Manager) {
+	t.Helper()
+	svc := replay.Service{
+		Storage: &apiTestStorage{},
+		Output:  &apiTestClient{},
+	}
+	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false, timeout)
 	srv := NewServer(mgr, nil)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -126,6 +148,7 @@ func TestHandlersInvalidJSON(t *testing.T) {
 	}
 	for _, path := range cases {
 		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, bytes.NewBufferString(`{"bad":`))
+		req.Header.Set("X-TM-Session", testSessionToken)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			t.Fatalf("POST %s: %v", path, err)
@@ -405,6 +428,45 @@ func TestWSStateEndpoint(t *testing.T) {
 	resp.Body.Close()
 }
 
+func TestControlLockAndClaim(t *testing.T) {
+	timeout := 300 * time.Millisecond
+	ts, _ := newTestServerWithTimeout(t, timeout)
+	defer ts.Close()
+
+	tokenA := "tok-A"
+	tokenB := "tok-B"
+
+	// A устанавливает диапазон -> становится контроллером.
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/job/range", map[string]any{
+		"from":   time.Now().Add(-time.Second).UTC().Format(time.RFC3339),
+		"to":     time.Now().UTC().Format(time.RFC3339),
+		"step":   "1s",
+		"speed":  1,
+		"window": "1s",
+	}, tokenA); resp.StatusCode != http.StatusOK {
+		t.Fatalf("range set by A status = %d", resp.StatusCode)
+	}
+
+	// B пытается остановить — должен получить 403.
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/job/stop", nil, tokenB); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("stop by B status = %d, want 403", resp.StatusCode)
+	}
+
+	// Ждём, пока истечёт таймаут, и Claim от B должен сработать.
+	time.Sleep(timeout + 100*time.Millisecond)
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/session/claim", nil, tokenB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim by B status = %d, want 200", resp.StatusCode)
+	}
+
+	// Теперь stop от B проходит, а от A — 403.
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/job/stop", nil, tokenB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("stop by B status = %d, want 200", resp.StatusCode)
+	}
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/job/stop", nil, tokenA); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("stop by A after claim status = %d, want 403", resp.StatusCode)
+	}
+}
+
 func TestJobV2PendingFlow(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()
@@ -503,6 +565,10 @@ func TestV2CommandsLifecycle(t *testing.T) {
 }
 
 func postJSON(t *testing.T, url string, body map[string]any) *http.Response {
+	return postJSONWithToken(t, url, body, testSessionToken)
+}
+
+func postJSONWithToken(t *testing.T, url string, body map[string]any, token string) *http.Response {
 	t.Helper()
 	var buf bytes.Buffer
 	if body != nil {
@@ -510,7 +576,15 @@ func postJSON(t *testing.T, url string, body map[string]any) *http.Response {
 			t.Fatalf("encode body: %v", err)
 		}
 	}
-	resp, err := http.Post(url, "application/json", &buf)
+	req, err := http.NewRequest(http.MethodPost, url, &buf)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("X-TM-Session", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("post %s: %v", url, err)
 	}
@@ -518,8 +592,19 @@ func postJSON(t *testing.T, url string, body map[string]any) *http.Response {
 }
 
 func getJSON(t *testing.T, url string, out interface{}) {
+	getJSONWithToken(t, url, out, testSessionToken)
+}
+
+func getJSONWithToken(t *testing.T, url string, out interface{}, token string) {
 	t.Helper()
-	resp, err := http.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("X-TM-Session", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("get %s: %v", url, err)
 	}

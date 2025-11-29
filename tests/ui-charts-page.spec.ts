@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('charts: add/remove, color change, toggles and clear', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const setRange = async () => {
     const rangeResp = await page.request.get('/api/v2/job/range');

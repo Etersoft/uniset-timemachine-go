@@ -45,6 +45,8 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
 Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
 
+Управление защищено сессиями: все управляющие запросы требуют заголовок `X-TM-Session`. За токен и актуальность отвечает API `/api/v2/session` (при `ping=1` — keepalive), “забрать управление” — `POST /api/v2/session/claim`. Таймаут выдачи управления настраивается флагом `--control-timeout` (`0` — не отдавать). При чужом токене управляющие вызовы вернут `403 control locked`.
+
 Пример YAML для serve-режима (см. `config/config.yaml`) включает адрес HTTP-сервера:
 
 ```yaml

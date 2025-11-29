@@ -42,6 +42,7 @@ type options struct {
 	batchSize     int
 	httpAddr      string
 	wsBatchTime   time.Duration
+	controlTimeout time.Duration
 	sqliteCacheMB int
 	sqliteWAL     bool
 	sqliteSyncOff bool
@@ -164,6 +165,7 @@ func parseFlags() options {
 	flag.StringVar(&opt.chTable, "ch-table", "main_history", "ClickHouse table name (db.table or table)")
 	flag.StringVar(&opt.httpAddr, "http-addr", "", "run HTTP control server on the given addr (e.g. :8080)")
 	flag.DurationVar(&opt.wsBatchTime, "ws-batch-time", 100*time.Millisecond, "WebSocket updates batch interval (e.g. 100ms)")
+	flag.DurationVar(&opt.controlTimeout, "control-timeout", 0, "control session timeout (0 = never release control)")
 	flag.IntVar(&opt.sqliteCacheMB, "sqlite-cache-mb", 100, "SQLite cache size (MB) for PRAGMA cache_size; 0 to skip")
 	flag.BoolVar(&opt.sqliteWAL, "sqlite-wal", true, "Enable SQLite WAL mode (PRAGMA journal_mode=WAL)")
 	flag.BoolVar(&opt.sqliteSyncOff, "sqlite-sync-off", true, "Set PRAGMA synchronous=OFF for SQLite")
@@ -396,7 +398,8 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 		LogCache: opt.logCache,
 	}
 	streamer := api.NewStateStreamer(opt.wsBatchTime)
-	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer, saveAllowed, opt.saveOutput)
+	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer, saveAllowed, opt.saveOutput, opt.controlTimeout)
+	streamer.SetControlStatusProvider(manager.ControlStatus)
 	api.SetDebugLogging(opt.debugLogs)
 	server := api.NewServer(manager, streamer)
 	addr := opt.httpAddr

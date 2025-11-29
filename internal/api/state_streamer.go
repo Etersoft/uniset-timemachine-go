@@ -43,6 +43,8 @@ type wsMessage struct {
 	StepTs   string        `json:"step_ts,omitempty"`
 	StepUnix uint64        `json:"step_unix,omitempty"`
 	Updates  []wsSensorRow `json:"updates,omitempty"`
+	ControllerPresent bool `json:"controller_present,omitempty"`
+	ControlTimeoutSec int  `json:"control_timeout_sec,omitempty"`
 	// U — компактный формат обновлений: [id, value, hasValue(0/1)]
 	U [][]float64 `json:"u,omitempty"`
 }
@@ -68,6 +70,8 @@ type StateStreamer struct {
 	batchRows     map[int64]wsSensorRow
 	batchStep     replay.StepInfo
 	batchTimer    *time.Timer
+
+	controlStatus func() (bool, int)
 }
 
 // NewStateStreamer создаёт пустой стример.
@@ -82,6 +86,13 @@ func NewStateStreamer(batchInterval time.Duration) *StateStreamer {
 		batchInterval: batchInterval,
 		batchRows:     map[int64]wsSensorRow{},
 	}
+}
+
+// SetControlStatusProvider задаёт функцию, которая возвращает (controller_present, control_timeout_sec).
+func (s *StateStreamer) SetControlStatusProvider(fn func() (bool, int)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.controlStatus = fn
 }
 
 // BuildSensorInfo подготавливает карту ID → SensorInfo из конфига.
@@ -124,9 +135,10 @@ func (s *StateStreamer) Reset(infos map[int64]SensorInfo) {
 		s.batchTimer.Stop()
 	}
 	s.batchTimer = nil
+	s.mu.Unlock()
+
 	msg := wsMessage{Type: "reset"}
 	s.broadcastLocked(msg)
-	s.mu.Unlock()
 }
 
 // Publish применяет обновления шага и рассылает их по WebSocket.
@@ -252,13 +264,15 @@ func (s *StateStreamer) snapshotMessage() wsMessage {
 		return rows[i].Name < rows[j].Name
 	})
 
-	return wsMessage{
+	msg := wsMessage{
 		Type:     "snapshot",
 		StepID:   s.lastID,
 		StepTs:   formatTime(s.lastTs),
 		StepUnix: unixMs(s.lastTs),
 		Updates:  rows,
 	}
+	s.fillControlStatus(&msg)
+	return msg
 }
 
 func (s *StateStreamer) broadcastLocked(msg wsMessage) {
@@ -286,6 +300,23 @@ func formatTime(ts time.Time) string {
 	return ts.UTC().Format(time.RFC3339)
 }
 
+func (s *StateStreamer) fillControlStatus(msg *wsMessage) {
+	if msg == nil {
+		return
+	}
+	s.mu.RLock()
+	fn := s.controlStatus
+	s.mu.RUnlock()
+	if fn == nil {
+		return
+	}
+	present, timeoutSec := fn()
+	msg.ControllerPresent = present
+	if timeoutSec > 0 {
+		msg.ControlTimeoutSec = timeoutSec
+	}
+}
+
 func unixMs(ts time.Time) uint64 {
 	if ts.IsZero() {
 		return 0
@@ -301,10 +332,9 @@ func (s *StateStreamer) startBatchTimerLocked() {
 
 func (s *StateStreamer) flushBatch() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	if len(s.batchRows) == 0 {
 		s.batchTimer = nil
+		s.mu.Unlock()
 		return
 	}
 
@@ -319,11 +349,20 @@ func (s *StateStreamer) flushBatch() {
 		s.batchTimer.Stop()
 	}
 	s.batchTimer = nil
+	controlFn := s.controlStatus
+	s.mu.Unlock()
 
 	msg := wsMessage{
 		Type:     "updates",
 		StepID:   step.StepID,
 		StepUnix: unixMs(step.StepTs),
+	}
+	if controlFn != nil {
+		present, timeoutSec := controlFn()
+		msg.ControllerPresent = present
+		if timeoutSec > 0 {
+			msg.ControlTimeoutSec = timeoutSec
+		}
 	}
 
 	if len(rows) > 0 {

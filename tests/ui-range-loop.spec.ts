@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('range → play/pause cycles → stop', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const statusBadge = page.locator('#statusBadge');
 

@@ -79,6 +79,7 @@ services:
       --save-output=false
       --window 15s
       --step 1s
+      --control-timeout 5s
     ports:
       - "9090:9090"
     depends_on:

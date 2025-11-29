@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { gotoWithSession } from './utils';
 
 test('diagnostics toggle collects logs and can be cleared', async ({ page }) => {
-  await page.goto('/ui/');
+  await gotoWithSession(page);
 
   const diagEnable = page.locator('#diagEnable');
   const diagDownload = page.locator('#diagDownload');

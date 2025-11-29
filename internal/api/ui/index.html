@@ -121,13 +121,32 @@
     .chart-suggestion-highlight { color: #22d3ee; font-weight: 700; }
     datalist { display: none; }
     .input-disabled { opacity: 0.5; pointer-events: none; }
+    .brand-click { position: relative; cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M3.5 12c2.2-3.5 5.8-5.5 8.5-5.5S18.3 8.5 20.5 12c-2.2 3.5-5.8 5.5-8.5 5.5S5.7 15.5 3.5 12Z" fill="none" stroke="%23bcdcff" stroke-width="1.6"/><circle cx="12" cy="12" r="2.4" fill="none" stroke="%23bcdcff" stroke-width="1.6"/></svg>') 12 12, pointer; }
+    .brand-fadeout { animation: brandFadeOut 0.65s ease forwards; }
+    .brand-fadein { animation: brandFadeIn 0.65s ease forwards; }
+    @keyframes brandFadeOut { 0% { opacity: 1; } 100% { opacity: 0; } }
+    @keyframes brandFadeIn { 0% { opacity: 0; } 100% { opacity: 1; } }
+    .easter { position: relative; display: inline-flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.2em; color: #f8fbff; overflow: hidden; opacity: 0; }
+    .easter.show { opacity: 1; }
+    .easter.run { animation: easterFade 6s ease forwards; }
+    @keyframes easterFade {
+      0% { opacity: 0.18; }
+      12% { opacity: 0.32; }
+      50% { opacity: 0.6; }
+      70% { opacity: 0.95; }
+      100% { opacity: 1; }
+    }
+    .easter .shine { position: absolute; top: 0; left: -50%; width: 42%; height: 100%; background: linear-gradient(120deg, transparent, rgba(255,255,255,0.35), transparent); transform: skewX(-20deg); animation: sweep 2s ease-in-out infinite alternate; pointer-events: none; mix-blend-mode: screen; }
+    @keyframes sweep { 0% { left: -60%; opacity: 0; } 30% { opacity: 1; } 100% { left: 180%; opacity: 0; } }
   </style>
 </head>
 <body>
   <div class="page">
     <div class="header">
       <div class="title">
-        <p class="eyebrow" style="color:#f8fafc;">TimeMachine · Player · v2</p>
+        <p class="eyebrow" style="color:#f8fafc;">
+          <span id="brandContainer"><span id="brandEaster" class="brand-click">TimeMachine</span> · Player · v2</span>
+        </p>
         <h1 style="color:#94a3b8;">Sensors history</h1>
       </div>
       <div style="display:flex; flex-direction:column; gap:10px; align-items:flex-end; min-width:320px;">
@@ -523,6 +542,8 @@
         btn: document.getElementById('workingLoadBtn'),
         meta: document.getElementById('workingMeta'),
       },
+      brandContainer: document.getElementById('brandContainer'),
+      brandClick: document.getElementById('brandEaster'),
       tabs: document.querySelectorAll('[data-tab]'),
       panels: {
         control: document.getElementById('panel-control'),
@@ -2536,6 +2557,32 @@
       else el.classList.remove('is-disabled');
     }
 
+    const originalBrandHTML = `<span id="brandEaster" class="brand-click">TimeMachine</span> · Player · v2`;
+    let easterTimer = null;
+    function triggerEaster() {
+      if (!els.brandContainer) return;
+      const target = els.brandContainer;
+      if (easterTimer) clearTimeout(easterTimer);
+      target.classList.remove('brand-fadein', 'brand-fadeout');
+      target.classList.add('brand-fadeout');
+      setTimeout(() => {
+        target.innerHTML = `<span class="easter show run"><span class="shine"></span><span>..прошлое невозможно вернуть, но его можно увидеть..</span></span>`;
+        target.classList.remove('brand-fadeout');
+        target.classList.add('brand-fadein');
+      }, 320);
+      easterTimer = setTimeout(() => {
+        target.classList.remove('brand-fadein');
+        target.classList.add('brand-fadeout');
+        setTimeout(() => {
+          target.innerHTML = originalBrandHTML;
+          els.brandClick = document.getElementById('brandEaster');
+          if (els.brandClick) els.brandClick.addEventListener('click', triggerEaster);
+          target.classList.remove('brand-fadeout');
+          target.classList.add('brand-fadein');
+        }, 340);
+      }, 6200);
+    }
+
     function updateRangeLabel() {
       if (!els.rangePicker) return;
       const from = els.inputs.from.value.trim();
@@ -3301,6 +3348,9 @@
     }
 
     bindActions();
+    if (els.brandClick) {
+      els.brandClick.addEventListener('click', triggerEaster);
+    }
     updateControls();
     initResizablePanels();
     scheduleRenderTable(true);

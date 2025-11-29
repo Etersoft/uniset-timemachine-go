@@ -227,7 +227,11 @@
     </div>
 
     <div class="card">
-      <div class="timeline-label" id="currentLabel" style="text-align:center; font-size:13px; margin-bottom:8px; color:#cbd5e1;">-</div>
+      <div style="display:flex; justify-content:center; margin-bottom:8px;">
+        <div class="status-item" style="min-width:200px; text-align:center;">
+          <div id="currentLabel">-</div>
+        </div>
+      </div>
       <div class="timeline">
         <div class="timeline-label" id="fromLabel">from: -</div>
         <input id="timeline" type="range" min="0" max="1000" value="0" disabled>
@@ -712,7 +716,7 @@
       saveAllowed: false,
       wsBytes: [],
       saveDirty: false,
-      diagEnabled: false,
+      diagEnabled: new URLSearchParams(window.location.search).get('diag') === '1',
       netLogEnabled: false,
       rangePicked: false,
       workingSensors: [],
@@ -2300,7 +2304,8 @@
   function requestJSON(method, url, body) {
     const bodyStr = body !== undefined ? JSON.stringify(body) : '';
     const stamp = new Date().toLocaleTimeString();
-    pushDiagNet(`[${stamp}] [fetch] ${method} ${url} body=${bodyStr}`, { truncateForDiag: true });
+    const tokenPrefix = state.sessionToken ? state.sessionToken.substring(0, 8) : 'none';
+    pushDiagNet(`[${stamp}] [fetch] ${method} ${url} token=${tokenPrefix}... body=${bodyStr}`, { truncateForDiag: true });
     logUI(`fetch ${method} ${url} body=${bodyStr ? truncate(bodyStr, 200) : ''}`);
     const init = { method, headers: {} };
     if (state.sessionToken) {
@@ -2331,25 +2336,42 @@
     }
 
   async function initSession() {
-    let token = localStorage.getItem('tmSession') || '';
-    const headers = {};
-    if (token) headers['X-TM-Session'] = token;
+    // Всегда запрашиваем новый session token при загрузке страницы,
+    // чтобы каждая вкладка получила уникальную сессию.
     try {
-      const resp = await fetch('/api/v2/session', { headers });
+      // КРИТИЧНО: Сбрасываем токен ДО запроса! При дублировании вкладки
+      // браузер копирует JavaScript память включая state.sessionToken.
+      // Если не сбросить - старый токен попадёт в заголовок запроса.
+      const oldToken = state.sessionToken;
+      state.sessionToken = '';
+      console.log(`[INIT SESSION] requesting new session token... (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+      pushDiagAction(`[init] requesting new session token... (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+      // ВАЖНО: Добавляем уникальный параметр _t для cache-busting
+      // чтобы браузер не использовал кэшированный ответ при дублировании вкладки
+      const timestamp = Date.now() + Math.random();
+      const resp = await fetch(`/api/v2/session?_t=${timestamp}`, {
+        cache: 'no-store',
+        // КРИТИЧНО: НЕ передаём X-TM-Session чтобы сервер сгенерировал НОВЫЙ токен
+        headers: {
+          'X-TM-Session': ''
+        }
+      });
       const data = await resp.json();
       if (!resp.ok) {
         throw new Error(data?.error || `HTTP ${resp.status}`);
       }
-      token = data.session || token || '';
+      const token = data.session || '';
+      console.log(`[INIT SESSION] received token=${token} is_ctrl=${data.is_controller} ctrl_present=${data.controller_present}`);
+      pushDiagAction(`[init] received token=${token.substring(0,8)}... is_ctrl=${data.is_controller} ctrl_present=${data.controller_present}`);
       state.sessionToken = token;
-      if (token) {
-        localStorage.setItem('tmSession', token);
-      }
       state.controlTimeoutSec = data.control_timeout_sec || 0;
       state.controllerPresent = !!data.controller_present;
+      // Если контроллера нет - можем управлять; если есть - проверяем что МЫ контроллер
       state.isController = !!data.is_controller || !state.controllerPresent;
       state.canClaim = !!data.can_claim;
       state.controlLocked = state.controllerPresent && !state.isController;
+      console.log(`[INIT SESSION] => isCtrl=${state.isController} locked=${state.controlLocked}`);
+      pushDiagAction(`[init] => isCtrl=${state.isController} locked=${state.controlLocked}`);
       updateControlLockUI();
       updateControls();
     } catch (err) {
@@ -2657,6 +2679,9 @@
       if (els.rangeBtn) {
         setDisabled(els.rangeBtn, readOnly || active); // не трогаем диапазон во время активной задачи
       }
+      if (els.rangePicker) {
+        setDisabled(els.rangePicker, readOnly); // блокируем кнопку выбора диапазона если нет управления
+      }
       if (els.inputs.saveToSM) {
         const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
         setDisabled(els.inputs.saveToSM, readOnly || runningLike || !allowed);
@@ -2683,6 +2708,7 @@
 
     function updateControlLockUI() {
       const locked = !!state.controlLocked;
+      pushDiagAction(`[lock-ui] locked=${locked} hasNotice=${!!els.controlLock?.notice} display=${locked ? 'block' : 'none'}`);
       if (els.controlLock?.notice) {
         els.controlLock.notice.style.display = locked ? 'block' : 'none';
       }
@@ -2692,11 +2718,7 @@
       }
       if (els.controlLock?.chip) {
         els.controlLock.chip.style.display = locked ? 'inline-flex' : 'none';
-        if (locked && state.controlTimeoutSec) {
-          els.controlLock.chip.textContent = `Управление отключено · автоотдача через ${state.controlTimeoutSec}s`;
-        } else {
-          els.controlLock.chip.textContent = 'Управление отключено';
-        }
+        els.controlLock.chip.textContent = 'Управление отключено';
       }
     }
 
@@ -2778,6 +2800,26 @@
     }
     if (!state.workingReady) {
       await loadWorkingSensors().catch(() => {});
+    }
+    // Проверяем статус контроллера при каждом refresh.
+    // Отправляем наш токен чтобы узнать: являемся ли МЫ контроллером,
+    // и есть ли вообще активный контроллер.
+    try {
+      const sessionResp = await fetch('/api/v2/session', {
+        headers: state.sessionToken ? { 'X-TM-Session': state.sessionToken } : {}
+      });
+      const sessionData = await sessionResp.json();
+      if (sessionResp.ok) {
+        state.controllerPresent = !!sessionData.controller_present;
+        // Если контроллера нет - можем управлять; если есть - проверяем что МЫ контроллер
+        state.isController = !!sessionData.is_controller || !state.controllerPresent;
+        state.canClaim = !!sessionData.can_claim;
+        state.controlLocked = state.controllerPresent && !state.isController;
+        pushDiagAction(`[session] is_ctrl=${sessionData.is_controller} ctrl_present=${sessionData.controller_present} => isCtrl=${state.isController} locked=${state.controlLocked}`);
+        updateControlLockUI();
+      }
+    } catch (err) {
+      logUI(`Session check in refresh: ${err.message}`);
     }
     const url = '/api/v2/job';
       logUI(`refresh ${full ? 'full' : 'state'} start last_ts=${state.model.last_ts || state.model.LastTS}`);
@@ -3642,6 +3684,32 @@
     updateRangeLabel();
     updateDiagButtons();
     updateWorkingMeta();
+
+    // Диагностика автоматически включена через state.diagEnabled если ?diag=1
+    if (state.diagEnabled) {
+      console.log('[DIAG] Auto-enabled diagnostics via ?diag=1');
+    }
+
+    // Детект дублирования вкладки: используем sessionStorage который НЕ копируется при дублировании.
+    // При первой загрузке генерируем уникальный ID и сохраняем в sessionStorage.
+    // Если в state.sessionToken есть значение, но sessionStorage пуст - значит дублирование!
+    const storageTabId = sessionStorage.getItem('tabId');
+    if (!storageTabId) {
+      // sessionStorage пуст - это либо первая загрузка, либо дублирование
+      const newTabId = Math.random().toString(36).substring(2);
+      sessionStorage.setItem('tabId', newTabId);
+
+      if (state.sessionToken) {
+        // state.sessionToken есть но sessionStorage пуст - ДУБЛИРОВАНИЕ!
+        console.log(`[INIT] Detected duplicated tab (token exists but no storageTabId), clearing session`);
+        console.log(`[INIT] Old token=${state.sessionToken.substring(0,8)}... clearing...`);
+        state.sessionToken = '';
+      } else {
+        console.log(`[INIT] First load, generated tabId=${newTabId}`);
+      }
+    } else {
+      console.log(`[INIT] Reload, keeping tabId=${storageTabId}`);
+    }
 
     (async () => {
       await initSession();

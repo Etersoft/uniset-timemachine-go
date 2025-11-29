@@ -84,7 +84,16 @@ func (s *Server) routes(uiFS http.FileSystem) {
 		}
 		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
 	})
-	s.mux.Handle("/ui/", http.StripPrefix("/ui/", http.FileServer(uiFS)))
+	// Оборачиваем UI file server чтобы добавить заголовки запрета кеширования для HTML
+	s.mux.HandleFunc("/ui/", func(w http.ResponseWriter, r *http.Request) {
+		// Запрещаем кеширование HTML файлов чтобы браузер всегда загружал свежую версию
+		if r.URL.Path == "/ui/" || r.URL.Path == "/ui/index.html" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
+		}
+		http.StripPrefix("/ui/", http.FileServer(uiFS)).ServeHTTP(w, r)
+	})
 	s.mux.Handle("/ui/ui", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
 	s.mux.Handle("/ui/ui/", http.RedirectHandler("/ui/", http.StatusMovedPermanently))
 	s.mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
@@ -153,8 +162,12 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := s.sessionTokenFromRequest(r)
+	headerToken := r.Header.Get("X-TM-Session")
+	queryToken := r.URL.Query().Get("session")
+	log.Printf("[SESSION] GET /api/v2/session: header=%q query=%q final=%q", headerToken, queryToken, token)
 	if token == "" {
 		token = uuid.NewString()
+		log.Printf("[SESSION] Generated new token: %s", token)
 	}
 	status := s.manager.SessionStatus(token)
 	writeJSON(w, http.StatusOK, status)

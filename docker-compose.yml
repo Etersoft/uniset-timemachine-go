@@ -36,6 +36,7 @@ services:
       timeout: 3s
       retries: 5
 
+  # Playwright tests use timemachine-test with memstore (no DB dependency)
   playwright:
     image: mcr.microsoft.com/playwright:v1.39.0-jammy
     container_name: tm-playwright
@@ -47,14 +48,10 @@ services:
       - playwright-browsers:/ms-playwright
       - playwright-node:/workspace/node_modules
     depends_on:
-      timemachine:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-      clickhouse:
+      timemachine-test:
         condition: service_healthy
     environment:
-      - BASE_URL=http://timemachine:9090
+      - BASE_URL=http://timemachine-test:9090
       - NPM_CONFIG_CACHE=/tmp/.npm
       - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
       - PLAYWRIGHT_JUNIT_OUTPUT_NAME=/tmp/playwright-junit.xml
@@ -67,12 +64,35 @@ services:
         npx playwright install chromium
         npx playwright test -c tests/playwright.config.ts --output /tmp/playwright-results --reporter=list
 
+  # For playwright tests: memstore (no --db), fast deterministic data
+  timemachine-test:
+    build: .
+    container_name: tm-app-test
+    profiles: ["tests"]
+    command: >
+      --http-addr 0.0.0.0:9090
+      --confile config/test.xml
+      --slist ALL
+      --output stdout
+      --save-output=false
+      --window 15s
+      --step 1s
+      --control-timeout 5s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # For development: real ClickHouse data
   timemachine:
     build: .
     container_name: tm-app
     restart: unless-stopped
     command: >
       --http-addr 0.0.0.0:9090
+      --db clickhouse://clickhouse:9000/uniset
+      --ch-table uniset.main_history
       --confile config/test.xml
       --slist ALL
       --output stdout
@@ -90,7 +110,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-    profiles: ["tests"]
 
 volumes:
   pgdata: {}

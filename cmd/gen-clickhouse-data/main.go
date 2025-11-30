@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/url"
@@ -40,11 +41,17 @@ type sensorGenerator struct {
 	rng      *rand.Rand
 	value    float64
 	nextTime time.Time
+	startTime time.Time
 	endTime  time.Time
 
 	// для аналоговых: фаза стабильности
 	phaseEnd time.Time
 	baseVal  float64
+
+	// параметры синусоиды (уникальные для каждого датчика)
+	sinAmplitude float64 // амплитуда 2-10
+	sinPeriod    float64 // период 30-120 сек
+	sinPhase     float64 // начальная фаза 0-2π
 }
 
 func main() {
@@ -164,11 +171,12 @@ func newGenerator(name, iotype string, start, end time.Time, sensorIndex int) *s
 	}
 	rng := rand.New(rand.NewSource(seed))
 	gen := &sensorGenerator{
-		name:     name,
-		iotype:   strings.ToUpper(iotype),
-		rng:      rng,
-		nextTime: start,
-		endTime:  end,
+		name:      name,
+		iotype:    strings.ToUpper(iotype),
+		rng:       rng,
+		nextTime:  start,
+		startTime: start,
+		endTime:   end,
 	}
 	gen.init(sensorIndex)
 	return gen
@@ -188,6 +196,11 @@ func (g *sensorGenerator) init(sensorIndex int) {
 		// Смещаем начало фазы случайным образом, чтобы скачки не совпадали
 		initialPhaseOffset := time.Duration(g.rng.Intn(40)) * time.Second
 		g.phaseEnd = g.nextTime.Add(initialPhaseOffset + g.stablePhaseDuration())
+
+		// Параметры синусоиды — уникальные для каждого датчика
+		g.sinAmplitude = 2 + g.rng.Float64()*8      // амплитуда 2-10
+		g.sinPeriod = 30 + g.rng.Float64()*90       // период 30-120 сек
+		g.sinPhase = g.rng.Float64() * 2 * math.Pi  // начальная фаза 0-2π
 	}
 }
 
@@ -220,18 +233,22 @@ func (g *sensorGenerator) next() *event {
 			// скачок: меняем базу на ±10-30
 			jump := (g.rng.Float64()*40 - 20) // -20..+20
 			g.baseVal += jump
-			// ограничиваем диапазон 0-100
+			// ограничиваем снизу (не уходим в минус)
 			if g.baseVal < 0 {
 				g.baseVal = g.rng.Float64() * 20
-			}
-			if g.baseVal > 100 {
-				g.baseVal = 80 + g.rng.Float64()*20
 			}
 			g.phaseEnd = g.nextTime.Add(g.stablePhaseDuration())
 		}
 
-		// плавное изменение в пределах фазы
-		g.value = g.baseVal + (g.rng.Float64()*2 - 1) // ±1
+		// Время от начала в секундах
+		elapsed := g.nextTime.Sub(g.startTime).Seconds()
+
+		// Синусоидальная составляющая
+		sinValue := g.sinAmplitude * math.Sin(2*math.Pi*elapsed/g.sinPeriod+g.sinPhase)
+
+		// Итоговое значение: база + синусоида + небольшой шум
+		noise := g.rng.Float64()*2 - 1 // ±1
+		g.value = g.baseVal + sinValue + noise
 	}
 
 	return ev
@@ -333,7 +350,9 @@ func parseFlags() options {
 	flag.StringVar(&opt.selector, "selector", "ALL", "sensor selector")
 	flag.IntVar(&opt.sensors, "sensors", 0, "limit number of sensors (0 = all)")
 	flag.DurationVar(&opt.duration, "duration", 10*time.Minute, "total time range to generate")
-	flag.StringVar(&opt.start, "start", "2024-06-01T00:00:00Z", "start timestamp (RFC3339)")
+	// Default start: 7 days ago (to avoid TTL expiration in CH)
+	defaultStart := time.Now().UTC().AddDate(0, 0, -7).Truncate(24*time.Hour).Format(time.RFC3339)
+	flag.StringVar(&opt.start, "start", defaultStart, "start timestamp (RFC3339)")
 	flag.StringVar(&opt.nodename, "nodename", "node1", "value for nodename column")
 	flag.StringVar(&opt.producer, "producer", "gen-data", "value for producer column")
 	flag.IntVar(&opt.batchSize, "batch", 10000, "rows per batch send (direct mode)")

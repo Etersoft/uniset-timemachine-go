@@ -3,7 +3,7 @@ TM_CLICKHOUSE_DSN ?= clickhouse://localhost:9000/default
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down ch-up ch-down ch-tests gen-sensors gen-db bench check-sm clean-bench run
+.PHONY: help pg-up pg-down ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run
 
 help:
 	@echo "Available targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "  ch-up       - start ClickHouse docker and create schema"
 	@echo "  ch-down     - stop ClickHouse docker"
 	@echo "  ch-tests    - run ClickHouse integration tests (starts CH if needed)"
+	@echo "  ch-gen-data - generate realistic CH data (see GEN_CH_*)"
 	@echo "  gen-sensors - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
 	@echo "  gen-db      - generate SQLite dataset (see GEN_DB_*)"
 	@echo "  gen-config-example - write config/config-example.yaml"
@@ -48,6 +49,24 @@ ch-tests:
 	done
 	@echo "Running ClickHouse integration tests..."
 	@TM_CLICKHOUSE_DSN=$(TM_CLICKHOUSE_DSN) go test ./internal/storage/clickhouse/... -v -timeout 60s
+
+# ClickHouse data generation
+GEN_CH_SENSORS ?= 0
+GEN_CH_DURATION ?= 10m
+GEN_CH_SELECTOR ?= ALL
+GEN_CH_SQL_OUTPUT ?=
+
+ch-gen-data:
+	@echo "Generating ClickHouse data..."
+	@go run ./cmd/gen-clickhouse-data \
+		--db $(TM_CLICKHOUSE_DSN) \
+		--table uniset.main_history \
+		--confile config/test.xml \
+		--selector $(GEN_CH_SELECTOR) \
+		$(if $(filter-out 0,$(GEN_CH_SENSORS)),--sensors $(GEN_CH_SENSORS),) \
+		--duration $(GEN_CH_DURATION) \
+		--truncate \
+		$(if $(GEN_CH_SQL_OUTPUT),--sql-output $(GEN_CH_SQL_OUTPUT),)
 
 GEN_SENSORS_OUTPUT ?= config/generated-sensors.xml
 GEN_SENSORS_START ?= 10001

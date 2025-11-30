@@ -340,7 +340,7 @@ func TestUIIndexServed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read /ui/ body: %v", err)
 	}
-	if !bytes.Contains(body, []byte("TimeMachine Player")) {
+	if !bytes.Contains(body, []byte("TimeMachine Replayer")) {
 		t.Fatalf("ui index missing expected marker, got: %s", string(body))
 	}
 }

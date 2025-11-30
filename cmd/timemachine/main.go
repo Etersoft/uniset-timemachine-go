@@ -117,7 +117,7 @@ func main() {
 		return
 	}
 
-	fmt.Fprintf(os.Stdout, "timemachine %s — console player (work in progress)\n", version)
+	fmt.Fprintf(os.Stdout, "timemachine %s — console replayer (work in progress)\n", version)
 	fmt.Fprintf(os.Stdout, "  DB: %s\n  Config: %s\n  Sensors: %d (%s)\n  Period: %s → %s\n  Step: %s\n  Window: %s\n  Speed: %.2fx\n  Output: %s\n",
 		opts.dbURL, opts.config, len(sensors), opts.sensorSet, fromTs.Format(time.RFC3339), toTs.Format(time.RFC3339), opts.step, opts.window, opts.speed, opts.output)
 
@@ -181,7 +181,7 @@ func parseFlags() options {
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage: %s [options]\n\n", os.Args[0])
-		fmt.Fprintln(flag.CommandLine.Output(), "Sensor history player prototype. Example:")
+		fmt.Fprintln(flag.CommandLine.Output(), "Sensor history replayer prototype. Example:")
 		fmt.Fprintf(flag.CommandLine.Output(), "  %s --db postgres://user:pass@host/db --confile sensors.yaml --from 2024-06-01T00:00:00Z --to 2024-06-01T01:00:00Z\n\n", os.Args[0])
 		flag.PrintDefaults()
 	}

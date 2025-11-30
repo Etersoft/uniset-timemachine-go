@@ -3,13 +3,15 @@ TM_CLICKHOUSE_DSN ?= clickhouse://localhost:9000/default
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run
+.PHONY: help pg-up pg-down pg-tests pg-gen-data ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run
 
 help:
 	@echo "Available targets:"
 	@echo "  help        - this message"
 	@echo "  pg-up       - start Postgres docker and seed it"
 	@echo "  pg-down     - stop Postgres docker"
+	@echo "  pg-tests    - run PostgreSQL integration tests (starts PG if needed)"
+	@echo "  pg-gen-data - generate realistic PG data (see GEN_PG_*)"
 	@echo "  ch-up       - start ClickHouse docker and create schema"
 	@echo "  ch-down     - stop ClickHouse docker"
 	@echo "  ch-tests    - run ClickHouse integration tests (starts CH if needed)"
@@ -31,6 +33,33 @@ pg-up:
 
 pg-down:
 	@docker compose down -v
+
+pg-tests:
+	@echo "Starting PostgreSQL..."
+	@docker compose up -d postgres
+	@echo "Waiting for PostgreSQL to be ready..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		docker compose exec -T postgres pg_isready -U admin -d uniset >/dev/null 2>&1 && break || sleep 1; \
+	done
+	@echo "Running PostgreSQL integration tests..."
+	@TM_POSTGRES_DSN=$(TM_POSTGRES_DSN) go test ./internal/storage/postgres/... -v -timeout 60s
+
+# PostgreSQL data generation
+GEN_PG_SENSORS ?= 0
+GEN_PG_DURATION ?= 10m
+GEN_PG_SELECTOR ?= ALL
+GEN_PG_SQL_OUTPUT ?=
+
+pg-gen-data:
+	@echo "Generating PostgreSQL data..."
+	@go run ./cmd/gen-postgres-data \
+		--db $(TM_POSTGRES_DSN) \
+		--confile config/test.xml \
+		--selector $(GEN_PG_SELECTOR) \
+		$(if $(filter-out 0,$(GEN_PG_SENSORS)),--sensors $(GEN_PG_SENSORS),) \
+		--duration $(GEN_PG_DURATION) \
+		--truncate \
+		$(if $(GEN_PG_SQL_OUTPUT),--sql-output $(GEN_PG_SQL_OUTPUT),)
 
 ch-up:
 	@docker compose up -d clickhouse

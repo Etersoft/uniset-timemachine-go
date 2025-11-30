@@ -36,13 +36,14 @@ type options struct {
 
 // sensorGenerator генерирует события для одного датчика
 type sensorGenerator struct {
-	name     string
-	iotype   string
-	rng      *rand.Rand
-	value    float64
-	nextTime time.Time
+	name      string
+	iotype    string
+	rng       *rand.Rand
+	value     float64
+	lastSaved float64 // последнее сохранённое значение (для фильтрации)
+	nextTime  time.Time
 	startTime time.Time
-	endTime  time.Time
+	endTime   time.Time
 
 	// для аналоговых: фаза стабильности
 	phaseEnd time.Time
@@ -209,23 +210,21 @@ func (g *sensorGenerator) isDiscrete() bool {
 }
 
 func (g *sensorGenerator) next() *event {
-	if !g.nextTime.Before(g.endTime) {
-		return nil
-	}
+	for g.nextTime.Before(g.endTime) {
+		currentTime := g.nextTime
+		currentValue := g.value
 
-	ev := &event{
-		ts:    g.nextTime,
-		value: g.value,
-		name:  g.name,
-	}
+		if g.isDiscrete() {
+			// переключение через 10-50 сек
+			delay := time.Duration(10+g.rng.Intn(41)) * time.Second
+			g.nextTime = g.nextTime.Add(delay)
+			g.value = 1 - g.value // переключаем 0↔1
+			// дискретные всегда сохраняем (это уже момент изменения)
+			g.lastSaved = currentValue
+			return &event{ts: currentTime, value: currentValue, name: g.name}
+		}
 
-	if g.isDiscrete() {
-		// переключение через 10-50 сек
-		delay := time.Duration(10+g.rng.Intn(41)) * time.Second
-		g.nextTime = g.nextTime.Add(delay)
-		g.value = 1 - g.value // переключаем 0↔1
-	} else {
-		// аналоговый: событие каждую секунду
+		// аналоговый: вычисляем значение каждую секунду
 		g.nextTime = g.nextTime.Add(time.Second)
 
 		// проверяем, нужен ли скачок (конец стабильной фазы)
@@ -241,7 +240,7 @@ func (g *sensorGenerator) next() *event {
 		}
 
 		// Время от начала в секундах
-		elapsed := g.nextTime.Sub(g.startTime).Seconds()
+		elapsed := currentTime.Sub(g.startTime).Seconds()
 
 		// Синусоидальная составляющая
 		sinValue := g.sinAmplitude * math.Sin(2*math.Pi*elapsed/g.sinPeriod+g.sinPhase)
@@ -249,9 +248,15 @@ func (g *sensorGenerator) next() *event {
 		// Итоговое значение: база + синусоида + небольшой шум
 		noise := g.rng.Float64()*2 - 1 // ±1
 		g.value = g.baseVal + sinValue + noise
-	}
 
-	return ev
+		// Сохраняем только при существенном изменении (> 0.5)
+		if math.Abs(g.value-g.lastSaved) > 0.5 {
+			g.lastSaved = g.value
+			return &event{ts: currentTime, value: g.value, name: g.name}
+		}
+		// иначе продолжаем цикл — ищем следующую точку с существенным изменением
+	}
+	return nil
 }
 
 func (g *sensorGenerator) stablePhaseDuration() time.Duration {

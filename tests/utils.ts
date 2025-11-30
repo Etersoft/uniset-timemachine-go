@@ -14,7 +14,7 @@ export async function ensureSession(page: Page, token: string = DEFAULT_TOKEN): 
   // Проставляем токен в localStorage до загрузки UI.
   await page.context().addInitScript((tok) => {
     try {
-      window.localStorage.setItem('tm_session', tok as string);
+      window.sessionStorage.setItem('tm_session', tok as string);
     } catch {
       /* ignore */
     }

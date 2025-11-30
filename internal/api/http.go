@@ -165,13 +165,13 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 	token := s.sessionTokenFromRequest(r)
 	headerToken := r.Header.Get("X-TM-Session")
 	queryToken := r.URL.Query().Get("session")
-	log.Printf("[SESSION] GET /api/v2/session: header=%q query=%q final=%q", headerToken, queryToken, token)
+	logDebugf("[SESSION] GET /api/v2/session: header=%q query=%q final=%q", headerToken, queryToken, token)
 	if token == "" {
 		token = uuid.NewString()
-		log.Printf("[SESSION] Generated new token: %s", token)
+		logDebugf("[SESSION] Generated new token: %s", token)
 	}
 	status := s.manager.SessionStatus(token)
-	log.Printf("[SESSION] RESP session=%q is_ctrl=%v ctrl_present=%v ctrl_session=%q can_claim=%v timeout=%d age=%d",
+	logDebugf("[SESSION] RESP session=%q is_ctrl=%v ctrl_present=%v ctrl_session=%q can_claim=%v timeout=%d age=%d",
 		status.Session, status.IsController, status.ControllerPresent, status.ControllerSession, status.CanClaim, status.ControlTimeoutSec, status.ControllerAgeSec)
 	writeJSON(w, http.StatusOK, status)
 }
@@ -186,17 +186,17 @@ func (s *Server) handleSessionClaim(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errSessionRequired)
 		return
 	}
-	log.Printf("[SESSION] CLAIM requested token=%q", token)
+	logDebugf("[SESSION] CLAIM requested token=%q", token)
 	if err := s.manager.ClaimControl(token); err != nil {
 		status := http.StatusForbidden
 		if errors.Is(err, errControlLocked) {
 			status = http.StatusConflict
 		}
-		log.Printf("[SESSION] CLAIM result token=%q err=%v (status=%d)", token, err, status)
+		logDebugf("[SESSION] CLAIM result token=%q err=%v (status=%d)", token, err, status)
 		writeError(w, status, err)
 		return
 	}
-	log.Printf("[SESSION] CLAIM success token=%q", token)
+	logDebugf("[SESSION] CLAIM success token=%q", token)
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "is_controller": true})
 }
 

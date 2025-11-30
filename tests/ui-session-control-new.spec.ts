@@ -196,7 +196,7 @@ test.describe('Session Control - New Logic', () => {
       controlLocked: (window as any).tmState?.controlLocked,
       token: ((window as any).tmState?.sessionToken || '').substring(0, 8),
     }));
-    console.log('STATE AFTER CLAIM (manual test):', st2);
+    // console.log('STATE AFTER CLAIM (manual test):', st2);
 
     // Проверяем что управление разблокировалось
     const rangePicker2 = page2.locator('#rangePickerBtn');
@@ -293,8 +293,8 @@ test.describe('Session Control - New Logic', () => {
     const newToken = 'reload-new-session';
     await page1.evaluate((tok) => {
       try {
-        window.localStorage.removeItem('tm_session');
-        window.localStorage.setItem('tm_session', tok as string);
+        window.sessionStorage.removeItem('tm_session');
+        window.sessionStorage.setItem('tm_session', tok as string);
       } catch { /* ignore */ }
     }, newToken);
     await page1.context().setExtraHTTPHeaders({ 'X-TM-Session': newToken });
@@ -328,7 +328,7 @@ test.describe('Session Control - New Logic', () => {
       controlLocked: (window as any).tmState?.controlLocked,
       token: ((window as any).tmState?.sessionToken || '').substring(0, 8),
     }));
-    console.log('STATE AFTER CLAIM (reload test):', st1);
+    // console.log('STATE AFTER CLAIM (reload test):', st1);
 
     // Проверяем что управление доступно
     await expect(rangePicker1).toBeEnabled({ timeout: 3000 });

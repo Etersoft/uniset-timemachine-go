@@ -2338,8 +2338,8 @@
     }
 
   async function initSession() {
-    // Проверяем localStorage для тестов.
-    // Если тест установил токен в localStorage - используем его.
+    // Проверяем sessionStorage для тестов.
+    // Если тест установил токен в sessionStorage - используем его.
     // Иначе запрашиваем новый токен с сервера.
     try {
       // Полный сброс клиентского состояния перед запросом статуса сессии.
@@ -2353,7 +2353,7 @@
       let token = '';
       let existingToken = '';
       try {
-        existingToken = window.localStorage.getItem('tm_session') || '';
+        existingToken = window.sessionStorage.getItem('tm_session') || '';
       } catch (e) {
         /* ignore */
       }
@@ -2364,12 +2364,12 @@
       state.sessionToken = '';
 
       if (existingToken) {
-        // Используем токен из localStorage (для тестов)
-        console.log(`[INIT SESSION] using token from localStorage: ${existingToken.substring(0,8)}...`);
-        pushDiagAction(`[init] using token from localStorage: ${existingToken.substring(0,8)}...`);
+        // Используем токен из sessionStorage (для тестов)
+        // debug disabled
+        pushDiagAction(`[init] using token from sessionStorage: ${existingToken.substring(0,8)}...`);
         token = existingToken;
       } else {
-        console.log(`[INIT SESSION] requesting new session (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+        // debug disabled
         pushDiagAction(`[init] requesting new session (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
       }
 
@@ -2393,12 +2393,12 @@
       state.sessionToken = token;
       state.controlTimeoutSec = data.control_timeout_sec || 0;
 
-      console.log(`[INIT SESSION] my_token=${mySession.substring(0,8)}... ctrl_session=${controllerSession.substring(0,8)} ctrl_present=${data.controller_present} is_ctrl=${data.is_controller}`);
+      // debug disabled
       pushDiagAction(`[init] my=${mySession.substring(0,8)} ctrl=${controllerSession.substring(0,8)} present=${data.controller_present} is_ctrl=${data.is_controller}`);
 
       // Если сервер говорит, что контроллер уже есть (неважно, наш ли токен) — блокируем управление и генерируем новый токен.
       if (data.controller_present) {
-        console.log(`[INIT SESSION] Контроллер уже есть (${controllerSession.substring(0,8)}), блокируем управление`);
+        // debug disabled
         pushDiagAction(`[init] controller_present, блокируем (is_ctrl=${data.is_controller})`);
 
         state.controllerPresent = true;
@@ -2408,16 +2408,16 @@
         // Оставляем текущий токен, чтобы состояние сессии в UI совпадало с тем,
         // что сервер видит по заголовку/хранилищу.
         try {
-          localStorage.setItem('tm_session', state.sessionToken);
+          sessionStorage.setItem('tm_session', state.sessionToken);
         } catch (_) {}
 
-        console.log(`[INIT SESSION] => locked=true token=${state.sessionToken.substring(0,8)}`);
+        // debug disabled
         pushDiagAction(`[init] => locked=true token=${state.sessionToken.substring(0,8)}`);
         updateControlLockUI();
         updateControls();
       } else {
         // Контроллера нет - АВТОМАТИЧЕСКИ забираем управление (ТОЛЬКО в initSession!)
-        console.log(`[INIT SESSION] => Контроллера нет, автоматически забираем управление`);
+        // debug disabled
         pushDiagAction(`[init] => Нет контроллера, автоматический claim`);
 
         state.controllerPresent = false;
@@ -2432,17 +2432,17 @@
             headers: { 'X-TM-Session': token },
           });
           if (claimResp.ok) {
-            console.log(`[INIT SESSION] Auto-claim успешен`);
+            // debug disabled
             pushDiagAction(`[init] Auto-claim OK`);
             state.isController = true;
             state.canClaim = false;
             state.controlLocked = false;
           } else {
-            console.log(`[INIT SESSION] Auto-claim провалился: ${claimResp.status}`);
+            // debug disabled
             pushDiagAction(`[init] Auto-claim FAILED ${claimResp.status}`);
           }
         } catch (err) {
-          console.log(`[INIT SESSION] Auto-claim ошибка: ${err.message}`);
+          // debug disabled
           pushDiagAction(`[init] Auto-claim ERROR ${err.message}`);
         }
       }
@@ -2739,7 +2739,7 @@
     }
 
     function updateControls() {
-      console.log('[CTRL] updateControls locked=', state.controlLocked, 'isCtrl=', state.isController, 'present=', state.controllerPresent, 'token=', (state.sessionToken||'').substring(0,8));
+      // debug disabled
       const st = statusNormalize(state.model.status);
       const params = state.model.params || state.model.Params || {};
       const pending = state.model.pending || state.model.Pending || {};
@@ -3797,7 +3797,7 @@
 
     // Диагностика автоматически включена через state.diagEnabled если ?diag=1
     if (state.diagEnabled) {
-      console.log('[DIAG] Auto-enabled diagnostics via ?diag=1');
+      // debug disabled
     }
 
     // Детект дублирования вкладки: используем sessionStorage который НЕ копируется при дублировании.
@@ -3811,14 +3811,14 @@
 
       if (state.sessionToken) {
         // state.sessionToken есть но sessionStorage пуст - ДУБЛИРОВАНИЕ!
-        console.log(`[INIT] Detected duplicated tab (token exists but no storageTabId), clearing session`);
-        console.log(`[INIT] Old token=${state.sessionToken.substring(0,8)}... clearing...`);
+        // debug disabled
+        // debug disabled
         state.sessionToken = '';
       } else {
-        console.log(`[INIT] First load, generated tabId=${newTabId}`);
+        // debug disabled
       }
     } else {
-      console.log(`[INIT] Reload, keeping tabId=${storageTabId}`);
+      // debug disabled
     }
 
     (async () => {

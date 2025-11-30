@@ -157,7 +157,12 @@ type event struct {
 }
 
 func newGenerator(name, iotype string, start, end time.Time, sensorIndex int) *sensorGenerator {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(sensorIndex)*12345))
+	// Используем хеш от имени датчика для стабильного, но уникального seed
+	seed := int64(sensorIndex)*1000003 + int64(len(name))*7919
+	for i, c := range name {
+		seed += int64(c) * int64(i+1) * 31
+	}
+	rng := rand.New(rand.NewSource(seed))
 	gen := &sensorGenerator{
 		name:     name,
 		iotype:   strings.ToUpper(iotype),
@@ -180,7 +185,9 @@ func (g *sensorGenerator) init(sensorIndex int) {
 		baseOffset := float64(sensorIndex) * (50 + g.rng.Float64()*100)
 		g.baseVal = baseOffset + g.rng.Float64()*30 // добавляем случайность
 		g.value = g.baseVal
-		g.phaseEnd = g.nextTime.Add(g.stablePhaseDuration())
+		// Смещаем начало фазы случайным образом, чтобы скачки не совпадали
+		initialPhaseOffset := time.Duration(g.rng.Intn(40)) * time.Second
+		g.phaseEnd = g.nextTime.Add(initialPhaseOffset + g.stablePhaseDuration())
 	}
 }
 

@@ -1,0 +1,15 @@
+database:
+  dsn: clickhouse://localhost:9000/uniset
+  table: uniset.main_history
+  step: 1s
+  window: 15s
+
+http:
+  addr: :9090
+
+sensors:
+  config: config/test.xml
+  selector: ALL
+
+output:
+  mode: stdout

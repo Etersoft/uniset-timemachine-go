@@ -3,8 +3,6 @@ package clickhouse
 import (
 	"context"
 	"fmt"
-	"net"
-	"net/url"
 	"strings"
 	"time"
 
@@ -39,31 +37,14 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.Resolver == nil {
 		return nil, fmt.Errorf("clickhouse: resolver is nil")
 	}
-	parsed, err := url.Parse(cfg.DSN)
+
+	// Нормализуем DSN: преобразуем наши схемы в стандартные для драйвера
+	normalizedDSN := normalizeDSN(cfg.DSN)
+
+	// Используем встроенный парсер драйвера для корректной обработки всех опций
+	opts, err := ch.ParseDSN(normalizedDSN)
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse: parse DSN: %w", err)
-	}
-	host := parsed.Host
-	if host == "" {
-		host = "localhost:9000"
-	}
-	if !strings.Contains(host, ":") {
-		host = net.JoinHostPort(host, "9000")
-	}
-	database := strings.TrimPrefix(parsed.Path, "/")
-	if database == "" {
-		database = "default"
-	}
-	username := parsed.User.Username()
-	password, _ := parsed.User.Password()
-
-	opts := &ch.Options{
-		Addr: []string{host},
-		Auth: ch.Auth{
-			Database: database,
-			Username: username,
-			Password: password,
-		},
 	}
 
 	conn, err := ch.Open(opts)
@@ -73,6 +54,11 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err := conn.Ping(ctx); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("clickhouse: ping: %w", err)
+	}
+
+	database := opts.Auth.Database
+	if database == "" {
+		database = "default"
 	}
 	table := cfg.Table
 	if table == "" {
@@ -306,10 +292,32 @@ WHERE name IN (SELECT name FROM %s)
 ORDER BY timestamp, name;
 `
 
+// IsSource возвращает true, если DSN указывает на ClickHouse.
+// Поддерживается только native протокол (порт 9000):
+// - clickhouse://host:9000/db
+// - ch://host:9000/db
+//
+// HTTP протокол не поддерживается в текущей реализации, так как
+// clickhouse-go v2 поддерживает HTTP только через database/sql интерфейс.
 func IsSource(dsn string) bool {
 	if dsn == "" {
 		return false
 	}
 	lower := strings.ToLower(dsn)
-	return strings.HasPrefix(lower, "clickhouse://") || strings.HasPrefix(lower, "ch://")
+	return strings.HasPrefix(lower, "clickhouse://") ||
+		strings.HasPrefix(lower, "ch://")
+}
+
+// normalizeDSN преобразует пользовательские схемы в формат, понятный драйверу:
+// - ch:// -> clickhouse:// (native protocol, port 9000)
+func normalizeDSN(dsn string) string {
+	lower := strings.ToLower(dsn)
+
+	// ch:// -> clickhouse:// (драйвер понимает clickhouse://)
+	if strings.HasPrefix(lower, "ch://") {
+		return "clickhouse://" + dsn[len("ch://"):]
+	}
+
+	// clickhouse:// оставляем как есть
+	return dsn
 }

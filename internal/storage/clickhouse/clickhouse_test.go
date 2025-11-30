@@ -29,18 +29,48 @@ func TestIsSource(t *testing.T) {
 		dsn  string
 		want bool
 	}{
+		// Native protocol (supported)
 		{"clickhouse://localhost:9000/db", true},
 		{"ch://localhost", true},
 		{"CLICKHOUSE://LOCALHOST", true},
 		{"CH://host", true},
+		{"clickhouse://user:pass@localhost:9000/db", true},
+		{"ch://user:pass@localhost/db", true},
+
+		// Not ClickHouse
 		{"postgres://localhost/db", false},
 		{"", false},
 		{"sqlite://test.db", false},
 		{"http://clickhouse.example.com", false},
+		{"https://clickhouse.example.com", false},
+		// HTTP protocol is not supported (requires database/sql interface)
+		{"clickhouse-http://localhost:8123/db", false},
+		{"ch-http://localhost/db", false},
 	}
 	for _, tt := range tests {
 		if got := IsSource(tt.dsn); got != tt.want {
 			t.Errorf("IsSource(%q) = %v, want %v", tt.dsn, got, tt.want)
+		}
+	}
+}
+
+func TestNormalizeDSN(t *testing.T) {
+	tests := []struct {
+		dsn  string
+		want string
+	}{
+		// clickhouse:// - stays unchanged
+		{"clickhouse://localhost:9000/db", "clickhouse://localhost:9000/db"},
+		{"clickhouse://user:pass@localhost:9000/db", "clickhouse://user:pass@localhost:9000/db"},
+
+		// ch:// -> clickhouse://
+		{"ch://localhost", "clickhouse://localhost"},
+		{"CH://Host:9000/DB", "clickhouse://Host:9000/DB"},
+		{"ch://user:pass@localhost/db", "clickhouse://user:pass@localhost/db"},
+	}
+	for _, tt := range tests {
+		if got := normalizeDSN(tt.dsn); got != tt.want {
+			t.Errorf("normalizeDSN(%q) = %q, want %q", tt.dsn, got, tt.want)
 		}
 	}
 }
@@ -66,11 +96,6 @@ func TestNewDSNParsing(t *testing.T) {
 			wantErr: "ping",
 		},
 		{
-			name:    "empty host defaults to localhost",
-			dsn:     "clickhouse:///testdb",
-			wantErr: "ping",
-		},
-		{
 			name:    "empty database defaults to default",
 			dsn:     "clickhouse://somehost:9000",
 			wantErr: "ping",
@@ -78,6 +103,11 @@ func TestNewDSNParsing(t *testing.T) {
 		{
 			name:    "with credentials",
 			dsn:     "clickhouse://user:pass@somehost:9000/testdb",
+			wantErr: "ping",
+		},
+		{
+			name:    "ch scheme converted to clickhouse",
+			dsn:     "ch://somehost:9000/testdb",
 			wantErr: "ping",
 		},
 	}

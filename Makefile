@@ -1,8 +1,9 @@
 TM_POSTGRES_DSN ?= postgres://admin:123@localhost:5432/uniset?sslmode=disable
+TM_CLICKHOUSE_DSN ?= clickhouse://localhost:9000/default
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down ch-up ch-down gen-sensors gen-db bench check-sm clean-bench run
+.PHONY: help pg-up pg-down ch-up ch-down ch-tests gen-sensors gen-db bench check-sm clean-bench run
 
 help:
 	@echo "Available targets:"
@@ -11,6 +12,7 @@ help:
 	@echo "  pg-down     - stop Postgres docker"
 	@echo "  ch-up       - start ClickHouse docker and create schema"
 	@echo "  ch-down     - stop ClickHouse docker"
+	@echo "  ch-tests    - run ClickHouse integration tests (starts CH if needed)"
 	@echo "  gen-sensors - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
 	@echo "  gen-db      - generate SQLite dataset (see GEN_DB_*)"
 	@echo "  gen-config-example - write config/config-example.yaml"
@@ -36,6 +38,16 @@ ch-up:
 
 ch-down:
 	@docker compose rm -sf clickhouse
+
+ch-tests:
+	@echo "Starting ClickHouse..."
+	@docker compose up -d clickhouse
+	@echo "Waiting for ClickHouse to be ready..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+		docker compose exec -T clickhouse clickhouse-client --query='SELECT 1' >/dev/null 2>&1 && break || sleep 1; \
+	done
+	@echo "Running ClickHouse integration tests..."
+	@TM_CLICKHOUSE_DSN=$(TM_CLICKHOUSE_DSN) go test ./internal/storage/clickhouse/... -v -timeout 60s
 
 GEN_SENSORS_OUTPUT ?= config/generated-sensors.xml
 GEN_SENSORS_START ?= 10001

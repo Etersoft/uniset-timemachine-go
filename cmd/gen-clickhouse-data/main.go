@@ -123,7 +123,7 @@ func main() {
 	totalRows := 0
 
 	for i, s := range sensors {
-		gen := newGenerator(s.name, s.iotype, startTs, endTs, int64(i))
+		gen := newGenerator(s.name, s.iotype, startTs, endTs, i)
 		for ev := gen.next(); ev != nil; ev = gen.next() {
 			if err := batch.Append(ev.ts, ev.value, ev.name, opts.nodename, opts.producer); err != nil {
 				log.Fatalf("append row: %v", err)
@@ -156,8 +156,8 @@ type event struct {
 	name  string
 }
 
-func newGenerator(name, iotype string, start, end time.Time, seed int64) *sensorGenerator {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano() + seed*12345))
+func newGenerator(name, iotype string, start, end time.Time, sensorIndex int) *sensorGenerator {
+	rng := rand.New(rand.NewSource(time.Now().UnixNano() + int64(sensorIndex)*12345))
 	gen := &sensorGenerator{
 		name:     name,
 		iotype:   strings.ToUpper(iotype),
@@ -165,17 +165,20 @@ func newGenerator(name, iotype string, start, end time.Time, seed int64) *sensor
 		nextTime: start,
 		endTime:  end,
 	}
-	gen.init()
+	gen.init(sensorIndex)
 	return gen
 }
 
-func (g *sensorGenerator) init() {
+func (g *sensorGenerator) init(sensorIndex int) {
 	if g.isDiscrete() {
 		// дискретный: начинаем с 0 или 1
 		g.value = float64(g.rng.Intn(2))
 	} else {
-		// аналоговый: случайное начальное значение 0-100
-		g.baseVal = g.rng.Float64() * 100
+		// аналоговый: базовое значение зависит от индекса датчика
+		// чтобы каждый датчик имел свой характерный диапазон
+		// Распределяем по диапазону 0-1000 с шагом ~50-150 на датчик
+		baseOffset := float64(sensorIndex) * (50 + g.rng.Float64()*100)
+		g.baseVal = baseOffset + g.rng.Float64()*30 // добавляем случайность
 		g.value = g.baseVal
 		g.phaseEnd = g.nextTime.Add(g.stablePhaseDuration())
 	}
@@ -293,7 +296,7 @@ func generateSQL(opts options, sensors []sensorInfo, start, end time.Time) error
 
 	totalRows := 0
 	for i, s := range sensors {
-		gen := newGenerator(s.name, s.iotype, start, end, int64(i))
+		gen := newGenerator(s.name, s.iotype, start, end, i)
 		for ev := gen.next(); ev != nil; ev = gen.next() {
 			row := fmt.Sprintf("('%s', %.6f, '%s', '%s', '%s')",
 				ev.ts.UTC().Format("2006-01-02 15:04:05.000000"),

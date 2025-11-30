@@ -22,8 +22,8 @@
 - `POST /api/v2/job/range` — подготовка диапазона без старта. Body: `from`, `to` (RFC3339), `step` (duration), `speed` (float, опционально), `window` (duration, опционально), `save_output` (bool).
 - `POST /api/v2/job/start` — запуск ранее подготовленного диапазона. Опционально `save_output`.
 - `POST /api/v2/job/reset` — остановка активной задачи (если была), очистка pending range/seek и отправка события `reset` в WebSocket.
-- `GET /api/v2/session` — сессионный токен управления (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`). Параметр `ping=1` — keepalive контроллера.
-- `POST /api/v2/session/claim` — “забрать управление” при пустом/просроченном контроллере (таймаут `--control-timeout`, `0` — не отдавать).
+- `GET /api/v2/session` — статус сессии (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`). Не забирает управление, `ping=1` — keepalive контроллера.
+- `POST /api/v2/session/claim` — “забрать управление” при пустом/просроченном контроллере (таймаут `--control-timeout`, `0` — не отдавать). Успех гарантирован только первому запросу при свободном/просроченном контроллере.
 - Управляющие запросы (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) требуют заголовок `X-TM-Session` и вернут `403 control locked` при чужом токене.
 - `POST /api/v2/job/pause` — перевод в `paused`.
 - `POST /api/v2/job/resume` — продолжение с теми же шагом/скоростью (использует pending seek, если был).

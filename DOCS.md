@@ -24,9 +24,9 @@ go run ./cmd/timemachine \
 - `GET /api/v2/ws/state` — WebSocket поток обновлений таблицы датчиков. При подключении приходит snapshot (`{type:"snapshot", step_id, step_ts, step_unix, updates:[{id,name,textname,value?,has_value?}]}`), далее дельты по шагам (`{type:"updates", step_id, step_ts, step_unix, updates:[{id,value,has_value?}]}`). Если таймстамп одинаков для всех датчиков, он передаётся в `step_ts/step_unix`, а в элементах — только `id/value`. Без upgrade вернёт `400/426`, а при отсутствующем streamer — `503`.
 - `/debug/pprof/*` — стандартные endpoint’ы pprof для съёма профилей (CPU/heap/trace) во время работы.
 - Управление требует сессионного заголовка `X-TM-Session`. Работа сессий:
-  - `GET /api/v2/session` — выдаёт/подтверждает токен, возвращает `session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`. Параметр `ping=1` обновляет `last_seen` для текущего контроллера.
-  - `POST /api/v2/session/claim` — “забрать управление”, срабатывает если контроллер пуст или просрочен (таймаут задаётся флагом `--control-timeout`, `0` — не отдавать).
-  - Управляющие эндпоинты (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) возвращают `403 control locked`, если токен не совпадает с активной сессией.
+  - `GET /api/v2/session` — **только** статус (не забирает управление): `session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`. Параметр `ping=1` обновляет `last_seen` для текущего контроллера.
+  - `POST /api/v2/session/claim` — “забрать управление” при пустом/просроченном контроллере (таймаут `--control-timeout`, `0` — не отдавать). Сервер гарантирует, что успех получит только первый запрос в состоянии “свободно/просрочено”.
+  - Управляющие эндпоинты (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) возвращают `403 control locked`, если токен не совпадает с активной сессией. UI автоклеймит только при первой загрузке, если контроллера нет; иначе показывает кнопку “Забрать управление” после таймаута.
 
 ### API v2 (pending range/seek, рабочий список)
 

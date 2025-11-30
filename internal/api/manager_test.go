@@ -522,3 +522,191 @@ func approxTime(a, b time.Time, tol time.Duration) bool {
 func normalizeStatus(s string) string {
 	return strings.ToLower(strings.TrimSpace(s))
 }
+
+func TestManagerReleaseControl(t *testing.T) {
+	timeout := 200 * time.Millisecond
+	m := NewManager(
+		replay.Service{Storage: &apiTestStorage{}, Output: &apiTestClient{}},
+		[]int64{1}, nil, 1, time.Second, 16, nil, true, false, timeout,
+	)
+
+	tokenA := "controller-a"
+	tokenB := "controller-b"
+
+	// TokenA захватывает управление.
+	if err := m.ClaimControl(tokenA); err != nil {
+		t.Fatalf("claim A err = %v", err)
+	}
+
+	// TokenB не может освободить управление, так как не является контроллером.
+	if err := m.ReleaseControl(tokenB, false); err == nil || !errors.Is(err, errControlLocked) {
+		t.Fatalf("release B want errControlLocked, got %v", err)
+	}
+
+	// Пустой токен не может освободить управление.
+	if err := m.ReleaseControl("", false); err != errSessionRequired {
+		t.Fatalf("release empty token err = %v, want errSessionRequired", err)
+	}
+
+	// TokenA освобождает управление.
+	if err := m.ReleaseControl(tokenA, false); err != nil {
+		t.Fatalf("release A err = %v", err)
+	}
+
+	// Проверяем что управление освобождено - tokenB может сразу забрать.
+	if err := m.ClaimControl(tokenB); err != nil {
+		t.Fatalf("claim B after release err = %v", err)
+	}
+
+	// TokenB освобождает управление.
+	if err := m.ReleaseControl(tokenB, false); err != nil {
+		t.Fatalf("release B err = %v", err)
+	}
+
+	// TokenA может сразу забрать обратно (без ожидания таймаута).
+	if err := m.ClaimControl(tokenA); err != nil {
+		t.Fatalf("claim A after release B err = %v", err)
+	}
+}
+
+// Проверяем, что управление достаётся только первому запросившему,
+// а последующие получают ошибку до истечения таймаута.
+func TestManagerClaimExclusive(t *testing.T) {
+	m := NewManager(
+		replay.Service{Storage: &apiTestStorage{}, Output: &apiTestClient{}},
+		[]int64{1}, nil, 1, time.Second, 16, nil, true, false, 5*time.Second,
+	)
+	token1 := "first"
+	token2 := "second"
+
+	if err := m.ClaimControl(token1); err != nil {
+		t.Fatalf("first claim err = %v", err)
+	}
+	if err := m.ClaimControl(token2); !errors.Is(err, errControlLocked) {
+		t.Fatalf("second claim must be rejected with errControlLocked, got %v", err)
+	}
+}
+
+// TestSessionStatusAutoAssignFirstController проверяет полный сценарий управления несколькими сессиями:
+// 1. Первая сессия явно забирает управление через ClaimControl
+// 2. Вторая и третья сессии видят что контроллер уже есть
+// 3. Первая сессия делает logout (освобождает управление)
+// 4. Вторая сессия успешно забирает управление через ClaimControl
+func TestSessionStatusAutoAssignFirstController(t *testing.T) {
+	timeout := 500 * time.Millisecond
+	m := NewManager(
+		replay.Service{Storage: &apiTestStorage{}, Output: &apiTestClient{}},
+		[]int64{1}, nil, 1, time.Second, 16, nil, true, false, timeout,
+	)
+
+	token1 := "session-1"
+	token2 := "session-2"
+	token3 := "session-3"
+
+	// Шаг 1: Первая сессия запрашивает статус - контроллера нет, can_claim=true.
+	status1 := m.SessionStatus(token1)
+	if status1.IsController {
+		t.Fatalf("первая сессия НЕ должна быть контроллером без явного claim: is_controller=%v", status1.IsController)
+	}
+	if status1.ControllerPresent {
+		t.Fatalf("controller_present должен быть false (контроллера еще нет): %v", status1.ControllerPresent)
+	}
+	if !status1.CanClaim {
+		t.Fatalf("can_claim должен быть true так как контроллера нет: %v", status1.CanClaim)
+	}
+	t.Logf("Session 1 (before claim): is_controller=%v controller_present=%v can_claim=%v",
+		status1.IsController, status1.ControllerPresent, status1.CanClaim)
+
+	// Шаг 2: Первая сессия явно забирает управление.
+	if err := m.ClaimControl(token1); err != nil {
+		t.Fatalf("claim control session 1 err = %v", err)
+	}
+	t.Logf("Session 1 выполнила claim")
+
+	// Шаг 3: Проверяем что первая сессия стала контроллером.
+	status1After := m.SessionStatus(token1)
+	if !status1After.IsController {
+		t.Fatalf("первая сессия должна быть контроллером после claim: is_controller=%v", status1After.IsController)
+	}
+	if !status1After.ControllerPresent {
+		t.Fatalf("controller_present должен быть true: %v", status1After.ControllerPresent)
+	}
+	if status1After.CanClaim {
+		t.Fatalf("can_claim должен быть false так как первая сессия - контроллер: %v", status1After.CanClaim)
+	}
+	t.Logf("Session 1 (after claim): is_controller=%v controller_present=%v can_claim=%v",
+		status1After.IsController, status1After.ControllerPresent, status1After.CanClaim)
+
+	// Шаг 4: Вторая сессия запрашивает статус - должна видеть что контроллер уже есть.
+	status2 := m.SessionStatus(token2)
+	if status2.IsController {
+		t.Fatalf("вторая сессия НЕ должна быть контроллером: is_controller=%v", status2.IsController)
+	}
+	if !status2.ControllerPresent {
+		t.Fatalf("вторая сессия должна видеть что контроллер присутствует: controller_present=%v", status2.ControllerPresent)
+	}
+	if status2.CanClaim {
+		t.Fatalf("can_claim должен быть false так как контроллер активен: %v", status2.CanClaim)
+	}
+	t.Logf("Session 2: is_controller=%v controller_present=%v can_claim=%v",
+		status2.IsController, status2.ControllerPresent, status2.CanClaim)
+
+	// Шаг 3: Третья сессия запрашивает статус - тоже должна видеть что контроллер есть.
+	status3 := m.SessionStatus(token3)
+	if status3.IsController {
+		t.Fatalf("третья сессия НЕ должна быть контроллером: is_controller=%v", status3.IsController)
+	}
+	if !status3.ControllerPresent {
+		t.Fatalf("третья сессия должна видеть что контроллер присутствует: controller_present=%v", status3.ControllerPresent)
+	}
+	if status3.CanClaim {
+		t.Fatalf("can_claim должен быть false так как контроллер активен: %v", status3.CanClaim)
+	}
+	t.Logf("Session 3: is_controller=%v controller_present=%v can_claim=%v",
+		status3.IsController, status3.ControllerPresent, status3.CanClaim)
+
+	// Шаг 4: Первая сессия делает logout (освобождает управление).
+	if err := m.ReleaseControl(token1, false); err != nil {
+		t.Fatalf("logout session 1 err = %v", err)
+	}
+	t.Logf("Session 1 выполнила logout")
+
+	// Шаг 5: Вторая сессия пытается забрать управление - должна успешно получить.
+	if err := m.ClaimControl(token2); err != nil {
+		t.Fatalf("claim control session 2 err = %v (должно быть успешно после logout session 1)", err)
+	}
+	t.Logf("Session 2 успешно забрала управление")
+
+	// Шаг 6: Проверяем что вторая сессия теперь контроллер.
+	status2After := m.SessionStatus(token2)
+	if !status2After.IsController {
+		t.Fatalf("вторая сессия должна быть контроллером после claim: is_controller=%v", status2After.IsController)
+	}
+	if !status2After.ControllerPresent {
+		t.Fatalf("controller_present должен быть true: %v", status2After.ControllerPresent)
+	}
+	t.Logf("Session 2 after claim: is_controller=%v controller_present=%v",
+		status2After.IsController, status2After.ControllerPresent)
+
+	// Шаг 7: Проверяем что первая сессия больше не контроллер.
+	status1After = m.SessionStatus(token1)
+	if status1After.IsController {
+		t.Fatalf("первая сессия НЕ должна быть контроллером после claim session 2: is_controller=%v", status1After.IsController)
+	}
+	if !status1After.ControllerPresent {
+		t.Fatalf("controller_present должен быть true (session 2 теперь контроллер): %v", status1After.ControllerPresent)
+	}
+	t.Logf("Session 1 after session 2 claimed: is_controller=%v controller_present=%v",
+		status1After.IsController, status1After.ControllerPresent)
+
+	// Шаг 8: Проверяем что третья сессия видит что контроллер - вторая сессия.
+	status3After := m.SessionStatus(token3)
+	if status3After.IsController {
+		t.Fatalf("третья сессия НЕ должна быть контроллером: is_controller=%v", status3After.IsController)
+	}
+	if !status3After.ControllerPresent {
+		t.Fatalf("controller_present должен быть true (session 2 контроллер): %v", status3After.ControllerPresent)
+	}
+	t.Logf("Session 3 after session 2 claimed: is_controller=%v controller_present=%v",
+		status3After.IsController, status3After.ControllerPresent)
+}

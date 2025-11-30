@@ -730,6 +730,8 @@
       controllerPresent: false,
       controlTimeoutSec: 0,
     };
+    // Экспортируем состояние для диагностики/тестов.
+    window.tmState = state;
 
     syncSaveToggle();
 
@@ -2336,42 +2338,115 @@
     }
 
   async function initSession() {
-    // Всегда запрашиваем новый session token при загрузке страницы,
-    // чтобы каждая вкладка получила уникальную сессию.
+    // Проверяем localStorage для тестов.
+    // Если тест установил токен в localStorage - используем его.
+    // Иначе запрашиваем новый токен с сервера.
     try {
-      // КРИТИЧНО: Сбрасываем токен ДО запроса! При дублировании вкладки
+      // Полный сброс клиентского состояния перед запросом статуса сессии.
+      state.isController = false;
+      state.controllerPresent = false;
+      state.canClaim = false;
+      state.controlLocked = true;
+      updateControlLockUI();
+      updateControls();
+
+      let token = '';
+      let existingToken = '';
+      try {
+        existingToken = window.localStorage.getItem('tm_session') || '';
+      } catch (e) {
+        /* ignore */
+      }
+
+      // КРИТИЧНО: Сбрасываем state.sessionToken ДО запроса! При дублировании вкладки
       // браузер копирует JavaScript память включая state.sessionToken.
-      // Если не сбросить - старый токен попадёт в заголовок запроса.
       const oldToken = state.sessionToken;
       state.sessionToken = '';
-      console.log(`[INIT SESSION] requesting new session token... (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
-      pushDiagAction(`[init] requesting new session token... (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+
+      if (existingToken) {
+        // Используем токен из localStorage (для тестов)
+        console.log(`[INIT SESSION] using token from localStorage: ${existingToken.substring(0,8)}...`);
+        pushDiagAction(`[init] using token from localStorage: ${existingToken.substring(0,8)}...`);
+        token = existingToken;
+      } else {
+        console.log(`[INIT SESSION] requesting new session (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+        pushDiagAction(`[init] requesting new session (clearing old=${oldToken.substring(0,8) || 'none'}...)`);
+      }
+
+      // Получаем статус сессии. Сервер автоматически назначит контроллером если это первая сессия.
       // ВАЖНО: Добавляем уникальный параметр _t для cache-busting
-      // чтобы браузер не использовал кэшированный ответ при дублировании вкладки
       const timestamp = Date.now() + Math.random();
       const resp = await fetch(`/api/v2/session?_t=${timestamp}`, {
         cache: 'no-store',
-        // КРИТИЧНО: НЕ передаём X-TM-Session чтобы сервер сгенерировал НОВЫЙ токен
         headers: {
-          'X-TM-Session': ''
+          'X-TM-Session': token
         }
       });
       const data = await resp.json();
       if (!resp.ok) {
         throw new Error(data?.error || `HTTP ${resp.status}`);
       }
-      const token = data.session || '';
-      console.log(`[INIT SESSION] received token=${token} is_ctrl=${data.is_controller} ctrl_present=${data.controller_present}`);
-      pushDiagAction(`[init] received token=${token.substring(0,8)}... is_ctrl=${data.is_controller} ctrl_present=${data.controller_present}`);
+
+      const controllerSession = data.controller_session || '';
+      const mySession = data.session || token;
+      token = mySession; // ВСЕГДА используем токен от сервера
       state.sessionToken = token;
       state.controlTimeoutSec = data.control_timeout_sec || 0;
-      state.controllerPresent = !!data.controller_present;
-      // Если контроллера нет - можем управлять; если есть - проверяем что МЫ контроллер
-      state.isController = !!data.is_controller || !state.controllerPresent;
-      state.canClaim = !!data.can_claim;
-      state.controlLocked = state.controllerPresent && !state.isController;
-      console.log(`[INIT SESSION] => isCtrl=${state.isController} locked=${state.controlLocked}`);
-      pushDiagAction(`[init] => isCtrl=${state.isController} locked=${state.controlLocked}`);
+
+      console.log(`[INIT SESSION] my_token=${mySession.substring(0,8)}... ctrl_session=${controllerSession.substring(0,8)} ctrl_present=${data.controller_present} is_ctrl=${data.is_controller}`);
+      pushDiagAction(`[init] my=${mySession.substring(0,8)} ctrl=${controllerSession.substring(0,8)} present=${data.controller_present} is_ctrl=${data.is_controller}`);
+
+      // Если сервер говорит, что контроллер уже есть (неважно, наш ли токен) — блокируем управление и генерируем новый токен.
+      if (data.controller_present) {
+        console.log(`[INIT SESSION] Контроллер уже есть (${controllerSession.substring(0,8)}), блокируем управление`);
+        pushDiagAction(`[init] controller_present, блокируем (is_ctrl=${data.is_controller})`);
+
+        state.controllerPresent = true;
+        state.isController = false;
+        state.canClaim = !!data.can_claim;
+        state.controlLocked = true;
+        // Оставляем текущий токен, чтобы состояние сессии в UI совпадало с тем,
+        // что сервер видит по заголовку/хранилищу.
+        try {
+          localStorage.setItem('tm_session', state.sessionToken);
+        } catch (_) {}
+
+        console.log(`[INIT SESSION] => locked=true token=${state.sessionToken.substring(0,8)}`);
+        pushDiagAction(`[init] => locked=true token=${state.sessionToken.substring(0,8)}`);
+        updateControlLockUI();
+        updateControls();
+      } else {
+        // Контроллера нет - АВТОМАТИЧЕСКИ забираем управление (ТОЛЬКО в initSession!)
+        console.log(`[INIT SESSION] => Контроллера нет, автоматически забираем управление`);
+        pushDiagAction(`[init] => Нет контроллера, автоматический claim`);
+
+        state.controllerPresent = false;
+        state.isController = false;
+        state.canClaim = true;
+        state.controlLocked = false;
+
+        // Автоматический claim ТОЛЬКО в initSession (один раз при загрузке)
+        try {
+          const claimResp = await fetch(`/api/v2/session/claim?session=${token}&_t=${Date.now()}`, {
+            method: 'POST',
+            headers: { 'X-TM-Session': token },
+          });
+          if (claimResp.ok) {
+            console.log(`[INIT SESSION] Auto-claim успешен`);
+            pushDiagAction(`[init] Auto-claim OK`);
+            state.isController = true;
+            state.canClaim = false;
+            state.controlLocked = false;
+          } else {
+            console.log(`[INIT SESSION] Auto-claim провалился: ${claimResp.status}`);
+            pushDiagAction(`[init] Auto-claim FAILED ${claimResp.status}`);
+          }
+        } catch (err) {
+          console.log(`[INIT SESSION] Auto-claim ошибка: ${err.message}`);
+          pushDiagAction(`[init] Auto-claim ERROR ${err.message}`);
+        }
+      }
+
       updateControlLockUI();
       updateControls();
     } catch (err) {
@@ -2387,6 +2462,19 @@
       log(`Session ping: ${err.message}`, false);
     }
   }
+
+  // Освобождаем управление при закрытии вкладки/перезагрузке.
+  window.addEventListener('beforeunload', () => {
+    if (!state.sessionToken) return;
+    const url = `/api/v2/session/logout?session=${encodeURIComponent(state.sessionToken)}`;
+    try {
+      const blob = new Blob([JSON.stringify({})], { type: 'application/json' });
+      navigator.sendBeacon(url, blob);
+    } catch (_) {
+      // Fallback для старых браузеров.
+      fetch(url, { method: 'POST', keepalive: true }).catch(() => {});
+    }
+  });
 
   function mergeSensorsFromAPI(list) {
     if (!Array.isArray(list)) return;
@@ -2651,13 +2739,16 @@
     }
 
     function updateControls() {
+      console.log('[CTRL] updateControls locked=', state.controlLocked, 'isCtrl=', state.isController, 'present=', state.controllerPresent, 'token=', (state.sessionToken||'').substring(0,8));
       const st = statusNormalize(state.model.status);
       const params = state.model.params || state.model.Params || {};
       const pending = state.model.pending || state.model.Pending || {};
       const range = getEffectiveRange(params, pending);
       const pendingRange = !!(pending?.range_set || pending?.RangeSet);
       const hasWorking = state.workingReady && state.workingSensors.length > 0;
-      const readOnly = !!state.controlLocked;
+      // Read-only, если контроллер присутствует и это не мы. Синхронизируем и в state.
+      const readOnly = !!state.controllerPresent && !state.isController;
+      state.controlLocked = readOnly;
       const active = hasWorking && (st === 'running' || st === 'paused' || st === 'stopping');
       const paused = st === 'paused';
       const curTs = currentTsFromServer();
@@ -2677,10 +2768,11 @@
       // Ползунок доступен при валидном диапазоне (даже до старта), чтобы можно было выбрать точку.
       setDisabled(els.timeline, readOnly || !range.valid || !hasWorking);
       if (els.rangeBtn) {
-        setDisabled(els.rangeBtn, readOnly || active); // не трогаем диапазон во время активной задачи
+        setDisabled(els.rangeBtn, readOnly || active);
       }
+      // rangePicker блокируем если пользователь не контроллер
       if (els.rangePicker) {
-        setDisabled(els.rangePicker, readOnly); // блокируем кнопку выбора диапазона если нет управления
+        setDisabled(els.rangePicker, readOnly);
       }
       if (els.inputs.saveToSM) {
         const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
@@ -2707,8 +2799,11 @@
     }
 
     function updateControlLockUI() {
-      const locked = !!state.controlLocked;
-      pushDiagAction(`[lock-ui] locked=${locked} hasNotice=${!!els.controlLock?.notice} display=${locked ? 'block' : 'none'}`);
+      // Синхронизируем флаг блокировки из текущего статуса контроллера.
+      state.controlLocked = !!state.controllerPresent && !state.isController;
+      // Показываем индикаторы блокировки только если мы не контроллер.
+      const locked = !!state.controlLocked && !state.isController;
+      pushDiagAction(`[lock-ui] locked=${locked} isCtrl=${state.isController} canClaim=${state.canClaim} hasNotice=${!!els.controlLock?.notice} display=${locked ? 'block' : 'none'}`);
       if (els.controlLock?.notice) {
         els.controlLock.notice.style.display = locked ? 'block' : 'none';
       }
@@ -2811,12 +2906,21 @@
       const sessionData = await sessionResp.json();
       if (sessionResp.ok) {
         state.controllerPresent = !!sessionData.controller_present;
-        // Если контроллера нет - можем управлять; если есть - проверяем что МЫ контроллер
-        state.isController = !!sessionData.is_controller || !state.controllerPresent;
+        // Проверяем что наш токен совпадает с токеном активного контроллера
+        if (!state.controllerPresent) {
+          // Нет контроллера - мы точно не контроллер
+          state.isController = false;
+        } else {
+          // Есть контроллер - проверяем, мы ли это
+          const controllerToken = sessionData.controller_session || '';
+          state.isController = (state.sessionToken === controllerToken);
+        }
         state.canClaim = !!sessionData.can_claim;
         state.controlLocked = state.controllerPresent && !state.isController;
-        pushDiagAction(`[session] is_ctrl=${sessionData.is_controller} ctrl_present=${sessionData.controller_present} => isCtrl=${state.isController} locked=${state.controlLocked}`);
+        pushDiagAction(`[session] our_token=${state.sessionToken.substring(0,8)} ctrl_token=${(sessionData.controller_session||'').substring(0,8)} ctrl_present=${sessionData.controller_present} => isCtrl=${state.isController} locked=${state.controlLocked}`);
         updateControlLockUI();
+        // Раннее обновление контролов по факту блокировки, чтобы не ждать завершения refresh.
+        updateControls();
       }
     } catch (err) {
       logUI(`Session check in refresh: ${err.message}`);
@@ -2851,6 +2955,7 @@
       }
       logUI(`refresh result status=${status} last_ts=${state.model.last_ts || state.model.LastTS} pendingRange=${pendingRange ? 'yes' : 'no'}`);
       updateStatusView();
+      updateControls();
   }
 
   async function startJob() {
@@ -2886,10 +2991,15 @@
         els.controlLock.claim.addEventListener('click', async () => {
           try {
             await requestJSON('POST', '/api/v2/session/claim');
+            // Мгновенно фиксируем локальное состояние, не дожидаясь следующего refresh,
+            // чтобы управление разблокировалось сразу после удачного claim.
             state.isController = true;
-            state.controlLocked = false;
+            state.controllerPresent = true;
             state.canClaim = false;
+            state.controlLocked = false;
+            updateControlLockUI();
             updateControls();
+            await refresh(false);
             log('Управление передано этой сессии');
           } catch (err) {
             log(`Claim failed: ${err.message}`, false);

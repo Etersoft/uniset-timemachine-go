@@ -45,7 +45,7 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
 Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
 
-Управление защищено сессиями: все управляющие запросы требуют заголовок `X-TM-Session`. За токен и актуальность отвечает API `/api/v2/session` (при `ping=1` — keepalive), “забрать управление” — `POST /api/v2/session/claim`. Таймаут выдачи управления настраивается флагом `--control-timeout` (`0` — не отдавать). При чужом токене управляющие вызовы вернут `403 control locked`.
+Управление защищено сессиями: все управляющие запросы требуют заголовок `X-TM-Session`. `GET /api/v2/session` **не** забирает управление — только возвращает статус (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`, `ping=1` — keepalive). Захват управления только явным `POST /api/v2/session/claim` (успех, если контроллер пуст или просрочен; таймаут — `--control-timeout`, `0` — не отдавать). При чужом токене управляющие вызовы вернут `403 control locked`. UI по умолчанию автоклеймит только при первой загрузке, если контроллера нет; в остальных случаях показывает кнопку «Забрать управление» после таймаута.
 
 Пример YAML для serve-режима (см. `config/config.yaml`) включает адрес HTTP-сервера:
 
@@ -151,6 +151,36 @@ go run ./cmd/timemachine --db clickhouse://default:@localhost:9000/uniset --ch-t
   --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:01:00Z \
   --step 150ms --batch-size 500 --speed 400 --output http://localhost:9191/api/v01/SharedMemory \
   --sm-supplier TestProc -v
+```
+
+## Тестирование
+
+### Playwright UI тесты
+
+Для запуска UI тестов с session control используется Docker Compose с профилем `tests`:
+
+```bash
+# Пересборка и запуск тест-окружения (timemachine с --control-timeout 5s)
+docker-compose --profile tests build timemachine
+docker-compose --profile tests up -d --force-recreate timemachine
+
+# Запуск всех UI тестов (требует запущенного timemachine контейнера)
+docker-compose --profile tests run --rm playwright npx playwright test -c tests/playwright.config.ts --reporter=list
+
+# Запуск только тестов session control
+docker-compose --profile tests run --rm playwright npx playwright test tests/ui-session-control-new.spec.ts -c tests/playwright.config.ts --reporter=list
+
+# Полный цикл: пересборка + запуск + тесты
+docker-compose --profile tests build timemachine && \
+  docker-compose --profile tests up -d --force-recreate timemachine && \
+  sleep 5 && \
+  docker-compose --profile tests run --rm playwright npx playwright test tests/ui-session-control.spec.ts -c tests/playwright.config.ts --reporter=list
+```
+
+Для отладки можно запустить конкретный тест по номеру строки:
+
+```bash
+docker-compose --profile tests run --rm playwright npx playwright test 'tests/ui-session-control-new.spec.ts:5' -c tests/playwright.config.ts --reporter=list
 ```
 
 ### Генерация крупных наборов для SQLite

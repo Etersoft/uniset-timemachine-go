@@ -33,7 +33,7 @@ type Manager struct {
 	sensorInfo     map[int64]SensorInfo
 	pending        pendingState
 	// Управляющая сессия
-	controllerSession string
+	controllerSession  string
 	controllerLastSeen time.Time
 	controlTimeout     time.Duration
 }
@@ -66,12 +66,13 @@ type job struct {
 }
 
 type SessionStatus struct {
-	Session            string `json:"session"`
-	IsController       bool   `json:"is_controller"`
-	ControllerPresent  bool   `json:"controller_present"`
-	ControllerAgeSec   int64  `json:"controller_age_sec"`
-	ControlTimeoutSec  int64  `json:"control_timeout_sec"`
-	CanClaim           bool   `json:"can_claim"`
+	Session           string `json:"session"`
+	IsController      bool   `json:"is_controller"`
+	ControllerPresent bool   `json:"controller_present"`
+	ControllerSession string `json:"controller_session"`
+	ControllerAgeSec  int64  `json:"controller_age_sec"`
+	ControlTimeoutSec int64  `json:"control_timeout_sec"`
+	CanClaim          bool   `json:"can_claim"`
 }
 
 // ControlStatus возвращает наличие контроллера и таймаут (секунды).
@@ -102,9 +103,9 @@ func NewManager(service replay.Service, sensors []int64, cfg *config.Config, spe
 			saveAllowed: saveAllowed,
 			saveOutput:  saveAllowed && defaultSave,
 		},
-		streamer:        streamer,
-		sensorInfo:      info,
-		controlTimeout:  controlTimeout,
+		streamer:           streamer,
+		sensorInfo:         info,
+		controlTimeout:     controlTimeout,
 		controllerLastSeen: time.Time{},
 	}
 	if m.streamer != nil {
@@ -166,10 +167,15 @@ func (m *Manager) ClaimControl(token string) error {
 }
 
 // SessionStatus возвращает информацию о текущем контроллере и возможности захвата.
+// Только возвращает статус, не меняет состояние. Для захвата управления используйте ClaimControl().
 func (m *Manager) SessionStatus(token string) SessionStatus {
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// SessionStatus только возвращает информацию, не меняет состояние.
+	// Чтобы стать контроллером, нужно явно вызвать ClaimControl().
+
 	var age int64
 	if !m.controllerLastSeen.IsZero() {
 		age = int64(now.Sub(m.controllerLastSeen).Seconds())
@@ -186,6 +192,7 @@ func (m *Manager) SessionStatus(token string) SessionStatus {
 		Session:           token,
 		IsController:      isCtrl,
 		ControllerPresent: m.controllerSession != "",
+		ControllerSession: m.controllerSession,
 		ControllerAgeSec:  age,
 		ControlTimeoutSec: timeoutSec,
 		CanClaim:          canClaim,
@@ -207,6 +214,25 @@ func (m *Manager) KeepAlive(token string) error {
 		return errControlLocked
 	}
 	m.controllerLastSeen = now
+	return nil
+}
+
+// ReleaseControl освобождает управление. Может вызвать только текущий контроллер.
+// При force=true сбрасывает контроллера без проверки токена (служебные сценарии/тесты).
+func (m *Manager) ReleaseControl(token string, force bool) error {
+	if token == "" && !force {
+		return errSessionRequired
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.controllerSession == "" {
+		return errControlLocked
+	}
+	if !force && token != m.controllerSession {
+		return errControlLocked
+	}
+	m.controllerSession = ""
+	m.controllerLastSeen = time.Time{}
 	return nil
 }
 

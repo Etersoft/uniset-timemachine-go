@@ -467,6 +467,57 @@ func TestControlLockAndClaim(t *testing.T) {
 	}
 }
 
+// Проверяем, что /api/v2/session корректно отражает наличие контроллера,
+// и второй Claim получает 409, пока активный контроллер не истёк.
+func TestSessionStatusAndClaimExclusiveHTTP(t *testing.T) {
+	timeout := 500 * time.Millisecond
+	ts, _ := newTestServerWithTimeout(t, timeout)
+	defer ts.Close()
+
+	tokenA := "tok-A"
+	tokenB := "tok-B"
+
+	// Claim без токена должен отдавать 400.
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/v2/session/claim", bytes.NewReader([]byte(`{}`)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("claim without token request err: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("claim without token status = %d, want 400", resp.StatusCode)
+	}
+	resp.Body.Close()
+
+	// Первый захватывает управление.
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/session/claim", nil, tokenA); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim A status = %d, want 200", resp.StatusCode)
+	}
+
+	// Вторая сессия видит, что контроллер присутствует.
+	var status map[string]any
+	getJSONWithToken(t, ts.URL+"/api/v2/session", &status, tokenB)
+	if present := status["controller_present"]; present != true {
+		t.Fatalf("controller_present for B = %v, want true", present)
+	}
+	if isCtrl := status["is_controller"]; isCtrl == true {
+		t.Fatalf("is_controller for B = %v, want false", isCtrl)
+	}
+	if canClaim := status["can_claim"]; canClaim == true {
+		t.Fatalf("can_claim for B = %v, want false while controller active", canClaim)
+	}
+
+	// Попытка Claim от B до таймаута должна вернуть 409.
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/session/claim", nil, tokenB); resp.StatusCode != http.StatusConflict {
+		t.Fatalf("second claim status = %d, want 409", resp.StatusCode)
+	}
+
+	// После истечения таймаута Claim должен пройти.
+	time.Sleep(timeout + 100*time.Millisecond)
+	if resp := postJSONWithToken(t, ts.URL+"/api/v2/session/claim", nil, tokenB); resp.StatusCode != http.StatusOK {
+		t.Fatalf("claim B after timeout status = %d, want 200", resp.StatusCode)
+	}
+}
+
 func TestJobV2PendingFlow(t *testing.T) {
 	ts, _ := newTestServer(t)
 	defer ts.Close()

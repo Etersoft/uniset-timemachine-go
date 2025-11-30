@@ -6,12 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/pprof"
 	"time"
-	"github.com/google/uuid"
 
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 )
@@ -105,6 +105,7 @@ func (s *Server) routes(uiFS http.FileSystem) {
 	}{
 		{"/api/v2/session", http.HandlerFunc(s.handleSession)},
 		{"/api/v2/session/claim", http.HandlerFunc(s.handleSessionClaim)},
+		{"/api/v2/session/logout", http.HandlerFunc(s.handleSessionLogout)},
 		{"/api/v2/sensors", http.HandlerFunc(s.handleSensors)},
 		{"/api/v2/job/sensors", http.HandlerFunc(s.handleJobSensors)},
 		{"/api/v2/job/sensors/count", http.HandlerFunc(s.handleSensorCount)},
@@ -170,6 +171,8 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[SESSION] Generated new token: %s", token)
 	}
 	status := s.manager.SessionStatus(token)
+	log.Printf("[SESSION] RESP session=%q is_ctrl=%v ctrl_present=%v ctrl_session=%q can_claim=%v timeout=%d age=%d",
+		status.Session, status.IsController, status.ControllerPresent, status.ControllerSession, status.CanClaim, status.ControlTimeoutSec, status.ControllerAgeSec)
 	writeJSON(w, http.StatusOK, status)
 }
 
@@ -179,11 +182,36 @@ func (s *Server) handleSessionClaim(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := s.sessionTokenFromRequest(r)
+	if token == "" {
+		writeError(w, http.StatusBadRequest, errSessionRequired)
+		return
+	}
+	log.Printf("[SESSION] CLAIM requested token=%q", token)
 	if err := s.manager.ClaimControl(token); err != nil {
+		status := http.StatusForbidden
+		if errors.Is(err, errControlLocked) {
+			status = http.StatusConflict
+		}
+		log.Printf("[SESSION] CLAIM result token=%q err=%v (status=%d)", token, err, status)
+		writeError(w, status, err)
+		return
+	}
+	log.Printf("[SESSION] CLAIM success token=%q", token)
+	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "is_controller": true})
+}
+
+func (s *Server) handleSessionLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, fmt.Errorf("method %s not allowed", r.Method))
+		return
+	}
+	token := s.sessionTokenFromRequest(r)
+	force := r.URL.Query().Get("force") == "1"
+	if err := s.manager.ReleaseControl(token, force); err != nil {
 		writeError(w, http.StatusForbidden, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "is_controller": true})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleJob(w http.ResponseWriter, r *http.Request) {

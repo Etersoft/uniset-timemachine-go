@@ -119,6 +119,14 @@
     .chart-suggest-item:hover { background: rgba(34,211,238,0.08); }
     .chart-suggest-item.active { background: rgba(34,211,238,0.12); }
     .chart-suggestion-highlight { color: #22d3ee; font-weight: 700; }
+    .chart-section { margin-bottom: 8px; }
+    .chart-section-header { display: flex; align-items: center; gap: 8px; padding: 8px 0; cursor: pointer; user-select: none; }
+    .chart-section-header:hover .chart-collapse-btn { border-color: #22d3ee; color: #22d3ee; }
+    .chart-collapse-btn { width: 28px; height: 28px; padding: 0; background: #111a2b; border: 1px solid #233143; border-radius: 8px; color: #94a3b8; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: transform 0.2s ease, border-color 0.15s, color 0.15s; flex-shrink: 0; }
+    .chart-collapse-btn.collapsed { transform: rotate(-90deg); }
+    .chart-section-title { font-size: 13px; font-weight: 600; color: #cbd5e1; }
+    .chart-section-content { overflow: hidden; transition: max-height 0.25s ease, opacity 0.2s ease; }
+    .chart-section-content.collapsed { max-height: 0 !important; opacity: 0; pointer-events: none; }
     datalist { display: none; }
     .input-disabled { opacity: 0.5; pointer-events: none; }
     .brand-click { position: relative; cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M3.5 12c2.2-3.5 5.8-5.5 8.5-5.5S18.3 8.5 20.5 12c-2.2 3.5-5.8 5.5-8.5 5.5S5.7 15.5 3.5 12Z" fill="none" stroke="%23bcdcff" stroke-width="1.6"/><circle cx="12" cy="12" r="2.4" fill="none" stroke="%23bcdcff" stroke-width="1.6"/></svg>') 12 12, pointer; }
@@ -322,14 +330,30 @@
           <div class="chart-meta" id="chartMeta">Нет данных</div>
         </div>
         <div class="chart-wrap">
-          <div class="chart-box" id="chartBox" style="height:420px;">
-            <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
+          <div class="chart-section" id="chartSectionAnalog">
+            <div class="chart-section-header" data-section="analog">
+              <button class="chart-collapse-btn" type="button" title="Свернуть/развернуть">&#9660;</button>
+              <span class="chart-section-title">Аналоговые значения</span>
+            </div>
+            <div class="chart-section-content" id="chartContentAnalog">
+              <div class="chart-box" id="chartBox" style="height:420px;">
+                <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
+              </div>
+              <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
+            </div>
           </div>
-          <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
-          <div class="chart-box step" id="chartBoxStep" style="height:220px; margin-top:12px;">
-            <canvas id="chartCanvasStep" style="width:100%; height:100%;"></canvas>
+          <div class="chart-section" id="chartSectionDiscrete">
+            <div class="chart-section-header" data-section="discrete">
+              <button class="chart-collapse-btn" type="button" title="Свернуть/развернуть">&#9660;</button>
+              <span class="chart-section-title">Дискретные значения</span>
+            </div>
+            <div class="chart-section-content" id="chartContentDiscrete">
+              <div class="chart-box step" id="chartBoxStep" style="height:220px;">
+                <canvas id="chartCanvasStep" style="width:100%; height:100%;"></canvas>
+              </div>
+              <div class="resize-handle chart-resize-handle" id="chartResizeHandleStep" title="Потяните, чтобы изменить высоту дискретного графика"></div>
+            </div>
           </div>
-          <div class="resize-handle chart-resize-handle" id="chartResizeHandleStep" title="Потяните, чтобы изменить высоту дискретного графика"></div>
           <div id="chartEmpty" class="muted" style="text-align:center; margin-top:8px;">Нет данных для отображения</div>
           <div class="chart-legend-wrap" id="chartLegendWrap" style="height:180px; overflow-y:auto; overflow-x:hidden;">
             <table class="chart-legend-table" id="chartLegendTable">
@@ -662,6 +686,10 @@
         colorDialog: document.getElementById('colorDialog'),
         colorInput: document.getElementById('colorInput'),
         smooth: document.getElementById('chartSmooth'),
+        sectionAnalog: document.getElementById('chartSectionAnalog'),
+        sectionDiscrete: document.getElementById('chartSectionDiscrete'),
+        contentAnalog: document.getElementById('chartContentAnalog'),
+        contentDiscrete: document.getElementById('chartContentDiscrete'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
       sensorsDialog: document.getElementById('sensorsDialog'),
@@ -3737,6 +3765,34 @@
       });
     }
 
+    function initChartSectionCollapse() {
+      const sections = [
+        { header: els.charts.sectionAnalog?.querySelector('.chart-section-header'), content: els.charts.contentAnalog, key: 'chartAnalogCollapsed', chart: () => chartState.chart },
+        { header: els.charts.sectionDiscrete?.querySelector('.chart-section-header'), content: els.charts.contentDiscrete, key: 'chartDiscreteCollapsed', chart: () => chartState.stepChart },
+      ];
+      sections.forEach(({ header, content, key, chart }) => {
+        if (!header || !content) return;
+        const btn = header.querySelector('.chart-collapse-btn');
+        const savedCollapsed = localStorage.getItem(key) === 'true';
+        if (savedCollapsed) {
+          content.classList.add('collapsed');
+          btn?.classList.add('collapsed');
+        }
+        header.addEventListener('click', (e) => {
+          e.preventDefault();
+          const isCollapsed = content.classList.toggle('collapsed');
+          btn?.classList.toggle('collapsed', isCollapsed);
+          localStorage.setItem(key, isCollapsed);
+          if (!isCollapsed) {
+            const c = chart();
+            if (c) {
+              setTimeout(() => c.resize(), 260);
+            }
+          }
+        });
+      });
+    }
+
     async function fetchSensorCount(from, to) {
       if (!isValidISO(from) || !isValidISO(to)) {
         rangeSensorCount = Infinity;
@@ -3789,6 +3845,7 @@
     }
     updateControls();
     initResizablePanels();
+    initChartSectionCollapse();
     scheduleRenderTable(true);
     updateChartMeta();
     updateRangeLabel();

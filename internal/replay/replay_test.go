@@ -96,7 +96,7 @@ func TestServiceRunBatchesUpdates(t *testing.T) {
 				t.Fatalf("step %d batch total mismatch: %d", stepID, p.BatchTotal)
 			}
 			for _, upd := range p.Updates {
-				items[upd.ID] = upd.Value
+				items[upd.Hash] = upd.Value
 			}
 		}
 		if len(items) != len(expected) {

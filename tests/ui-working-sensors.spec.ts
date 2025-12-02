@@ -8,54 +8,61 @@ test('working sensors: select existing, reset to all, load from text', async ({ 
   // Получаем справочник и полный список для проверок.
   const sensorsResp = await page.request.get('/api/v2/sensors');
   const sensorsJson = await sensorsResp.json();
-  const allSensors = (sensorsJson?.sensors ?? []) as Array<{ id: number; name: string }>;
+  const allSensors = (sensorsJson?.sensors ?? []) as Array<{ name: string }>;
   expect(allSensors.length).toBeGreaterThan(0);
-  const firstIds = allSensors.slice(0, 3).map(s => s.id).filter((id) => Number.isFinite(id));
-  expect(firstIds.length).toBeGreaterThan(1);
-  const nameSecond = allSensors[1]?.name || String(allSensors[1]?.id);
+  const firstNames = allSensors.slice(0, 3).map(s => s.name).filter((n) => typeof n === 'string' && n.length > 0);
+  expect(firstNames.length).toBeGreaterThan(1);
+  const nameSecond = allSensors[1]?.name;
 
   // Установим рабочий список сразу через API, чтобы диалог показывал нужные галочки.
-  await page.request.post('/api/v2/job/sensors', { data: { sensors: firstIds.slice(0, 2) } });
+  const namesToSelect = firstNames.slice(0, 2);
+  await page.request.post('/api/v2/job/sensors', { data: { sensors: namesToSelect } });
 
-  await page.goto('/ui/');
+  // Перезагружаем страницу чтобы UI подхватил новый рабочий список
+  await page.reload();
   await page.waitForSelector('#workingMeta');
+  // Ждём пока метка покажет что рабочий список загружен (не "загружаем...")
+  await page.waitForFunction(
+    () => {
+      const meta = document.querySelector('#workingMeta');
+      return meta && meta.textContent && !meta.textContent.includes('загружаем');
+    },
+    { timeout: 10_000 },
+  );
 
   // Открываем диалог выбора датчиков.
-  await page.getByRole('button', { name: 'Загрузить' }).click();
+  await page.getByRole('button', { name: 'Загрузить', exact: true }).click();
   await page.waitForSelector('#sensorsDialogBody tr');
-
-  // Проверяем, что отмечены нужные два датчика.
-  const idsToSelect = firstIds.slice(0, 2);
-  for (const id of idsToSelect) {
-    await expect(page.locator(`input.dlg-select[data-sensor="${id}"]`)).toBeChecked();
+  for (const name of namesToSelect) {
+    await expect(page.locator(`input.dlg-select[data-sensor="${name}"]`)).toBeChecked();
   }
   await page.click('#sensorsApplyBtn');
   await page.waitForTimeout(400);
 
   const workingAfterSelect = await (await page.request.get('/api/v2/job/sensors')).json();
-  const selectedServer = (workingAfterSelect?.sensors ?? []).map(Number).sort((a: number, b: number) => a - b);
-  expect(selectedServer).toEqual(idsToSelect.sort((a, b) => a - b));
+  const selectedServer = ((workingAfterSelect?.sensors ?? []) as string[]).sort();
+  expect(selectedServer).toEqual([...namesToSelect].sort());
 
   // Сбрасываем на все.
-  await page.getByRole('button', { name: 'Загрузить' }).click();
+  await page.getByRole('button', { name: 'Загрузить', exact: true }).click();
   await page.click('#sensorsResetBtn');
   await page.waitForTimeout(400);
   const workingAfterReset = await (await page.request.get('/api/v2/job/sensors')).json();
-  const afterResetIds = (workingAfterReset?.sensors ?? []) as number[];
-  expect(afterResetIds.length).toBeGreaterThan(selectedServer.length);
-  expect(afterResetIds.length).toBeGreaterThanOrEqual(allSensors.length);
+  const afterResetNames = (workingAfterReset?.sensors ?? []) as string[];
+  expect(afterResetNames.length).toBeGreaterThan(selectedServer.length);
+  expect(afterResetNames.length).toBeGreaterThanOrEqual(allSensors.length);
 
-  // Загрузка через текстовую область (id + name + неизвестный).
-  await page.getByRole('button', { name: 'Загрузить' }).click();
+  // Загрузка через текстовую область (name + неизвестный).
+  await page.getByRole('button', { name: 'Загрузить', exact: true }).click();
   await page.getByRole('button', { name: 'Загрузить из файла' }).click().catch(() => {}); // таб через data-sensortab
   // Переключение на вкладку файла
   await page.locator('[data-sensortab="file"]').click();
-  const textPayload = `${firstIds[0]}\nunknown_sensor_name\n${nameSecond}\n`;
+  const textPayload = `${firstNames[0]}\nunknown_sensor_name\n${nameSecond}\n`;
   await page.fill('#sensorsFileArea', textPayload);
   await page.click('#sensorsApplyBtn');
   await page.waitForTimeout(400);
   const workingAfterFile = await (await page.request.get('/api/v2/job/sensors')).json();
-  const afterFileIds = new Set((workingAfterFile?.sensors ?? []).map(Number));
-  expect(afterFileIds.has(firstIds[0])).toBeTruthy();
-  expect(afterFileIds.has(allSensors[1].id)).toBeTruthy();
+  const afterFileNames = new Set((workingAfterFile?.sensors ?? []) as string[]);
+  expect(afterFileNames.has(firstNames[0])).toBeTruthy();
+  expect(afterFileNames.has(nameSecond)).toBeTruthy();
 });

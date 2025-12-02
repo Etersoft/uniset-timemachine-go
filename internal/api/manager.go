@@ -24,13 +24,13 @@ type Manager struct {
 	mu sync.Mutex
 
 	service        replay.Service
-	sensors        []int64
-	defaultSensors []int64
+	sensors        []int64 // рабочий список hashes (cityhash64(name))
+	defaultSensors []int64 // дефолтный список hashes
 	defaults       defaults
 	job            *job
 	jobCancel      context.CancelFunc
 	streamer       *StateStreamer
-	sensorInfo     map[int64]SensorInfo
+	sensorInfo     map[int64]SensorInfo // hash → SensorInfo
 	pending        pendingState
 	// Управляющая сессия
 	controllerSession  string
@@ -82,16 +82,17 @@ func (m *Manager) ControlStatus() (present bool, timeoutSec int) {
 	return m.controllerSession != "", int(m.controlTimeout.Seconds())
 }
 
-// NewManager создаёт менеджер с заданным сервисом и списком датчиков.
+// NewManager создаёт менеджер с заданным сервисом и списком хешей датчиков.
+// sensors содержит hashes (cityhash64(name)).
 func NewManager(service replay.Service, sensors []int64, cfg *config.Config, speed float64, window time.Duration, batchSize int, streamer *StateStreamer, saveAllowed bool, defaultSave bool, controlTimeout time.Duration) *Manager {
-	metaIDs := sensors
-	if cfg != nil && len(cfg.Sensors) > 0 {
-		metaIDs = allSensorIDs(cfg)
+	metaHashes := sensors
+	if cfg != nil && cfg.Registry != nil && cfg.Registry.Count() > 0 {
+		metaHashes = cfg.Registry.AllHashesSortedByName()
 		// По умолчанию рабочий список — полный словарь из конфига.
-		sensors = metaIDs
+		sensors = metaHashes
 	}
 	defaultSensors := append([]int64(nil), sensors...)
-	info := BuildSensorInfo(cfg, metaIDs)
+	info := BuildSensorInfo(cfg, metaHashes)
 	m := &Manager{
 		service:        service,
 		sensors:        sensors,
@@ -468,14 +469,14 @@ func (m *Manager) Sensors() []SensorInfo {
 	}
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].Name == list[j].Name {
-			return list[i].ID < list[j].ID
+			return list[i].Hash < list[j].Hash
 		}
 		return list[i].Name < list[j].Name
 	})
 	return list
 }
 
-// WorkingSensors возвращает копию текущего рабочего списка датчиков.
+// WorkingSensors возвращает копию текущего рабочего списка хешей датчиков.
 func (m *Manager) WorkingSensors() []int64 {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -485,24 +486,25 @@ func (m *Manager) WorkingSensors() []int64 {
 }
 
 // SetWorkingSensors устанавливает текущий рабочий список датчиков.
-// Возвращает количество принятых и отклонённых id.
-func (m *Manager) SetWorkingSensors(ids []int64) (int, int, error) {
+// hashes содержит хеши датчиков (cityhash64(name)).
+// Возвращает количество принятых и отклонённых хешей.
+func (m *Manager) SetWorkingSensors(hashes []int64) (int, int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	seen := make(map[int64]struct{})
-	accepted := make([]int64, 0, len(ids))
+	accepted := make([]int64, 0, len(hashes))
 	rejected := 0
-	for _, id := range ids {
-		if _, ok := m.sensorInfo[id]; !ok {
+	for _, hash := range hashes {
+		if _, ok := m.sensorInfo[hash]; !ok {
 			rejected++
 			continue
 		}
-		if _, dup := seen[id]; dup {
+		if _, dup := seen[hash]; dup {
 			continue
 		}
-		seen[id] = struct{}{}
-		accepted = append(accepted, id)
+		seen[hash] = struct{}{}
+		accepted = append(accepted, hash)
 	}
 	if len(accepted) == 0 {
 		return 0, rejected, fmt.Errorf("no valid sensors")
@@ -514,27 +516,54 @@ func (m *Manager) SetWorkingSensors(ids []int64) (int, int, error) {
 	return len(accepted), rejected, nil
 }
 
-func allSensorIDs(cfg *config.Config) []int64 {
-	if cfg == nil || len(cfg.Sensors) == 0 {
-		return nil
-	}
-	ids := make([]int64, 0, len(cfg.Sensors))
-	for _, id := range cfg.Sensors {
-		ids = append(ids, id)
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	// deduplicate
-	out := ids[:0]
-	var prev int64
-	first := true
-	for _, id := range ids {
-		if first || id != prev {
-			out = append(out, id)
+// WorkingSensorNames возвращает имена текущих рабочих датчиков.
+func (m *Manager) WorkingSensorNames() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.sensors))
+	for _, hash := range m.sensors {
+		if info, ok := m.sensorInfo[hash]; ok {
+			names = append(names, info.Name)
 		}
-		prev = id
-		first = false
 	}
-	return out
+	return names
+}
+
+// SetWorkingSensorsByNames устанавливает рабочий список датчиков по именам.
+// Возвращает количество принятых, отклонённых имён и срез отклонённых имён.
+func (m *Manager) SetWorkingSensorsByNames(names []string) (int, []string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Построим обратный индекс name → hash
+	nameToHash := make(map[string]int64, len(m.sensorInfo))
+	for hash, info := range m.sensorInfo {
+		nameToHash[info.Name] = hash
+	}
+
+	seen := make(map[int64]struct{})
+	accepted := make([]int64, 0, len(names))
+	rejected := make([]string, 0)
+	for _, name := range names {
+		hash, ok := nameToHash[name]
+		if !ok {
+			rejected = append(rejected, name)
+			continue
+		}
+		if _, dup := seen[hash]; dup {
+			continue
+		}
+		seen[hash] = struct{}{}
+		accepted = append(accepted, hash)
+	}
+	if len(accepted) == 0 {
+		return 0, rejected, fmt.Errorf("no valid sensors")
+	}
+	m.sensors = accepted
+	if m.pending.rangeSet {
+		m.pending.rng.Sensors = append([]int64(nil), accepted...)
+	}
+	return len(accepted), rejected, nil
 }
 
 // Stop останавливает задачу.

@@ -8,9 +8,9 @@ test('table filter and add-to-chart from Sensors tab', async ({ page }) => {
   // Установим рабочий список датчиков заранее.
   const sensorsResp1 = await page.request.get('/api/v2/sensors');
   const sensorsAll = (await sensorsResp1.json())?.sensors ?? [];
-  const ids = sensorsAll.map((s: any) => s.id).filter((id: any) => Number.isFinite(Number(id)));
-  if (ids.length) {
-    await page.request.post('/api/v2/job/sensors', { data: { sensors: ids } });
+  const names = sensorsAll.map((s: any) => s.name).filter((n: any) => typeof n === 'string' && n.length > 0);
+  if (names.length) {
+    await page.request.post('/api/v2/job/sensors', { data: { sensors: names } });
   }
 
   // Даже без выбора диапазона таблица должна заполниться метаданными.

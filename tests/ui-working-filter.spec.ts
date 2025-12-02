@@ -16,17 +16,18 @@ test('sensors tab and suggestions respect working list', async ({ page }) => {
   const outside = s3;
 
   await page.request.post('/api/v2/job/sensors', {
-    data: { sensors: working.map((s: any) => s.id) },
+    data: { sensors: working.map((s: any) => s.name) },
   });
 
-  await page.goto('/ui/');
+  // Перезагружаем страницу чтобы UI подхватил новый рабочий список
+  await page.reload();
   await page.waitForSelector('#workingMeta');
+  // Ждём пока метка покажет что рабочий список загружен (не "загружаем...")
   await page.waitForFunction(
-    (len) => {
+    () => {
       const meta = document.querySelector('#workingMeta');
-      return meta && meta.textContent && meta.textContent.includes(`${len}/`);
+      return meta && meta.textContent && !meta.textContent.includes('загружаем');
     },
-    working.length,
     { timeout: 10_000 },
   );
   await page.getByRole('button', { name: 'Датчики' }).click();
@@ -41,13 +42,13 @@ test('sensors tab and suggestions respect working list', async ({ page }) => {
   await expect(rows).toHaveCount(expectedLen);
 
   for (const s of working) {
-    const name = s?.name || `${s?.id}`;
+    const name = s?.name;
     if (name) {
       expect(await page.locator('#tableBody td', { hasText: name }).count()).toBeGreaterThan(0);
     }
   }
   if (outside) {
-    const outName = outside?.name || `${outside?.id}`;
+    const outName = outside?.name;
     if (outName) {
       await expect(page.locator('#tableBody td', { hasText: outName })).toHaveCount(0);
     }
@@ -58,44 +59,42 @@ test('sensors tab and suggestions respect working list', async ({ page }) => {
   await page.waitForTimeout(200);
   const input = page.locator('#chartSensors');
 
-  const termWorking = `${working[0]?.id}`;
+  const termWorking = working[0]?.name || '';
   await input.fill(termWorking);
   const workingSuggestions = await page.evaluate(
-    ({ term, ids }) => {
+    ({ term, names }) => {
       const q = (term || '').toLowerCase();
       let cnt = 0;
-      const allowed = new Set(ids || []);
+      const allowed = new Set(names || []);
       // @ts-ignore
-      sensorIndex?.byId?.forEach?.((meta, id) => {
-        if (allowed.size && !allowed.has(id)) return;
-        const name = meta?.name || `${id}`;
-        if (!name.toLowerCase().includes(q) && !String(id).includes(q)) return;
+      sensorIndex?.byName?.forEach?.((meta: any, name: string) => {
+        if (allowed.size && !allowed.has(name)) return;
+        if (!name.toLowerCase().includes(q)) return;
         cnt++;
       });
       return cnt;
     },
-    { term: termWorking, ids: working.map((s: any) => s.id) },
+    { term: termWorking, names: working.map((s: any) => s.name) },
   );
   expect(workingSuggestions).toBeGreaterThan(0);
 
   if (outside) {
-    const termOutside = `${outside?.id}`;
+    const termOutside = outside?.name || '';
     await input.fill(termOutside);
     const outsideSuggestions = await page.evaluate(
-      ({ term, ids }) => {
+      ({ term, names }) => {
         const q = (term || '').toLowerCase();
         let cnt = 0;
-        const allowed = new Set(ids || []);
+        const allowed = new Set(names || []);
         // @ts-ignore
-        sensorIndex?.byId?.forEach?.((meta, id) => {
-          if (allowed.size && !allowed.has(id)) return;
-          const name = meta?.name || `${id}`;
-          if (!name.toLowerCase().includes(q) && !String(id).includes(q)) return;
+        sensorIndex?.byName?.forEach?.((meta: any, name: string) => {
+          if (allowed.size && !allowed.has(name)) return;
+          if (!name.toLowerCase().includes(q)) return;
           cnt++;
         });
         return cnt;
       },
-      { term: termOutside, ids: working.map((s: any) => s.id) },
+      { term: termOutside, names: working.map((s: any) => s.name) },
     );
     expect(outsideSuggestions).toBe(0);
   }
@@ -108,7 +107,7 @@ test('после выбора рабочего списка таблица и ф
   const sensors = (await sensorsResp.json())?.sensors || [];
   const analogs = sensors.filter((s: any) => ['AI', 'AO'].includes(String(s.iotype || '').toUpperCase()));
   const discretes = sensors.filter((s: any) => ['DI', 'DO'].includes(String(s.iotype || '').toUpperCase()));
-  const picked = [...analogs.slice(0, 10), ...discretes.slice(0, 5)].map((s: any) => s.id).filter((id: any) => Number.isFinite(id));
+  const picked = [...analogs.slice(0, 10), ...discretes.slice(0, 5)].map((s: any) => s.name).filter((n: any) => typeof n === 'string' && n.length > 0);
   test.skip(picked.length < 5, 'Нужно минимум 5 датчиков для проверки');
 
   // Устанавливаем рабочий список через API, чтобы не кликать 2200 строк.
@@ -118,6 +117,18 @@ test('после выбора рабочего списка таблица и ф
     workingJson?.count ??
     (Array.isArray(workingJson?.sensors) ? workingJson.sensors.length : undefined) ??
     picked.length;
+
+  // Перезагружаем страницу чтобы UI подхватил новый рабочий список
+  await page.reload();
+  await page.waitForSelector('#workingMeta');
+  // Ждём пока метка покажет что рабочий список загружен (не "загружаем...")
+  await page.waitForFunction(
+    () => {
+      const meta = document.querySelector('#workingMeta');
+      return meta && meta.textContent && !meta.textContent.includes('загружаем');
+    },
+    { timeout: 10_000 },
+  );
 
   // Если кнопка недоступна (например, страница ещё не отрисовала), подстрахуемся через API.
   const btn = page.getByRole('button', { name: 'Установить доступный диапазон' });
@@ -135,47 +146,52 @@ test('после выбора рабочего списка таблица и ф
   }
 
   await page.getByRole('button', { name: 'Датчики' }).click();
-  await page.waitForFunction(() => document.querySelectorAll('#tableBody tr').length > 0, null, {
-    timeout: 15_000,
-  });
-  const tableIds = await page.evaluate(() =>
+  // Ждём пока таблица отрисуется с любыми строками
+  await page.waitForFunction(
+    () => document.querySelectorAll('#tableBody tr').length > 0,
+    null,
+    { timeout: 15_000 },
+  );
+  // Даём время на перерисовку с учётом рабочего списка
+  await page.waitForTimeout(500);
+  const tableNames = await page.evaluate(() =>
     Array.from(document.querySelectorAll('#tableBody tr')).map(
-      (tr) => Number(tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add')) || null,
+      (tr) => tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add') || null,
     ),
   );
-  expect(tableIds.length).toBeGreaterThan(0);
-  expect(tableIds.length).toBeLessThanOrEqual(expectedCount);
-  expect(tableIds.every((id) => id && picked.includes(id))).toBeTruthy();
+  expect(tableNames.length).toBeGreaterThan(0);
+  expect(tableNames.length).toBeLessThanOrEqual(expectedCount);
+  expect(tableNames.every((name) => name && picked.includes(name))).toBeTruthy();
 
   // Фильтруем по имени первого датчика и проверяем, что остаются только совпадения рабочего списка.
-  const firstMeta = sensors.find((s: any) => s.id === picked[0]) || {};
-  const term = (firstMeta.name || String(firstMeta.id || '')).slice(0, 3) || String(firstMeta.id || '');
+  const firstMeta = sensors.find((s: any) => s.name === picked[0]) || {};
+  const term = (firstMeta.name || '').slice(0, 3);
   await page.fill('#tableFilter', term);
   const filteredRows = await page.evaluate(() =>
     Array.from(document.querySelectorAll('#tableBody tr')).map((tr) => ({
       text: tr.textContent || '',
-      id: Number(tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add')) || null,
+      name: tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add') || null,
     })),
   );
   expect(filteredRows.length).toBeGreaterThan(0);
   filteredRows.forEach((row) => {
     if (term) {
       const t = row.text.toLowerCase();
-      const matchesText = t.includes(term.toLowerCase()) || t.includes(String(firstMeta.id || '').toLowerCase());
-      const matchesId = row.id !== null && picked.includes(row.id);
-      expect(matchesText || matchesId).toBeTruthy();
+      const matchesText = t.includes(term.toLowerCase());
+      const matchesName = row.name !== null && picked.includes(row.name);
+      expect(matchesText || matchesName).toBeTruthy();
     }
   });
 
   // Сброс фильтра — снова ровно рабочий список.
   await page.fill('#tableFilter', '');
   await page.waitForTimeout(200);
-  const finalIds = await page.evaluate(() =>
+  const finalNames = await page.evaluate(() =>
     Array.from(document.querySelectorAll('#tableBody tr')).map(
-      (tr) => Number(tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add')) || null,
+      (tr) => tr.querySelector('button[data-chart-add]')?.getAttribute('data-chart-add') || null,
     ),
   );
-  expect(finalIds.length).toBeGreaterThan(0);
-  expect(finalIds.length).toBeLessThanOrEqual(expectedCount);
-  expect(finalIds.every((id) => id && picked.includes(id))).toBeTruthy();
+  expect(finalNames.length).toBeGreaterThan(0);
+  expect(finalNames.length).toBeLessThanOrEqual(expectedCount);
+  expect(finalNames.every((name) => name && picked.includes(name))).toBeTruthy();
 });

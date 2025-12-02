@@ -26,6 +26,7 @@ type Config struct {
 	Sets       map[string][]string `json:"sets"`
 	SensorMeta map[string]SensorMeta
 	idToName   map[int64]string
+	Registry   *SensorRegistry // реестр датчиков с hash идентификаторами
 }
 
 // Load загружает конфигурацию датчиков из JSON или XML.
@@ -42,6 +43,7 @@ func Load(path string) (*Config, error) {
 		Sensors:    map[string]int64{},
 		Sets:       map[string][]string{},
 		SensorMeta: map[string]SensorMeta{},
+		Registry:   NewSensorRegistry(),
 	}
 
 	switch ext := strings.ToLower(filepath.Ext(path)); ext {
@@ -64,12 +66,109 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// Resolve возвращает список ID датчиков согласно селектору.
+// Resolve возвращает список hash датчиков согласно селектору.
 // Селектор: "ALL", имя набора из Sets, имя отдельного датчика или список через запятую.
+// Возвращаемые значения - cityhash64(name).
 func (c *Config) Resolve(selector string) ([]int64, error) {
 	if c == nil {
 		return nil, errors.New("config: configuration is nil")
 	}
+
+	// Используем Registry если он заполнен
+	if c.Registry != nil && c.Registry.Count() > 0 {
+		return c.resolveWithRegistry(selector)
+	}
+
+	// Fallback на старую логику для JSON конфигов без Registry
+	return c.resolveLegacy(selector)
+}
+
+// resolveWithRegistry использует Registry для резолвинга селекторов.
+func (c *Config) resolveWithRegistry(selector string) ([]int64, error) {
+	if selector == "" || strings.EqualFold(selector, "ALL") {
+		return c.Registry.AllHashesSortedByName(), nil
+	}
+
+	// Набор из Sets
+	if names, ok := c.Sets[selector]; ok {
+		return c.hashesFromNames(names)
+	}
+
+	// Список через запятую
+	if strings.Contains(selector, ",") {
+		var hashes []int64
+		for _, name := range strings.Split(selector, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			resolved, err := c.resolveSingleToHash(name)
+			if err != nil {
+				return nil, err
+			}
+			hashes = append(hashes, resolved...)
+		}
+		return hashes, nil
+	}
+
+	return c.resolveSingleToHash(selector)
+}
+
+// resolveSingleToHash резолвит одиночный селектор в hash.
+func (c *Config) resolveSingleToHash(selector string) ([]int64, error) {
+	// Точное совпадение по имени
+	if key, ok := c.Registry.ByName(selector); ok {
+		return []int64{key.Hash}, nil
+	}
+
+	// Glob паттерн
+	if strings.ContainsAny(selector, "*?") {
+		return c.hashesFromPattern(selector)
+	}
+
+	return nil, fmt.Errorf("config: failed to resolve selector %q", selector)
+}
+
+// hashesFromNames возвращает hashes для списка имён.
+func (c *Config) hashesFromNames(names []string) ([]int64, error) {
+	result := make([]int64, 0, len(names))
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		key, ok := c.Registry.ByName(name)
+		if !ok {
+			return nil, fmt.Errorf("config: sensor %q not found", name)
+		}
+		result = append(result, key.Hash)
+	}
+	if len(result) == 0 {
+		return nil, errors.New("config: result is empty")
+	}
+	return result, nil
+}
+
+// hashesFromPattern возвращает hashes для glob-паттерна.
+func (c *Config) hashesFromPattern(pattern string) ([]int64, error) {
+	var hashes []int64
+	for _, key := range c.Registry.All() {
+		ok, err := filepath.Match(pattern, key.Name)
+		if err != nil {
+			return nil, fmt.Errorf("config: invalid pattern %q: %w", pattern, err)
+		}
+		if ok {
+			hashes = append(hashes, key.Hash)
+		}
+	}
+	if len(hashes) == 0 {
+		return nil, fmt.Errorf("config: pattern %q matched nothing", pattern)
+	}
+	sort.Slice(hashes, func(i, j int) bool { return hashes[i] < hashes[j] })
+	return hashes, nil
+}
+
+// resolveLegacy - старая логика для конфигов без Registry.
+func (c *Config) resolveLegacy(selector string) ([]int64, error) {
 	if selector == "" || strings.EqualFold(selector, "ALL") {
 		return c.allSensorIDs(), nil
 	}
@@ -194,6 +293,36 @@ func (c *Config) IDByName(name string) (int64, bool) {
 	return id, ok
 }
 
+// NameByHash возвращает имя датчика по его hash.
+func (c *Config) NameByHash(hash int64) (string, bool) {
+	if c == nil {
+		return "", false
+	}
+	if c.Registry != nil {
+		if key, ok := c.Registry.ByHash(hash); ok {
+			return key.Name, true
+		}
+	}
+	// Fallback на старый метод
+	return c.NameByID(hash)
+}
+
+// KeyByHash возвращает полный SensorKey по hash.
+func (c *Config) KeyByHash(hash int64) (*SensorKey, bool) {
+	if c == nil || c.Registry == nil {
+		return nil, false
+	}
+	return c.Registry.ByHash(hash)
+}
+
+// HasIDs возвращает true, если все датчики в конфиге имеют ID.
+func (c *Config) HasIDs() bool {
+	if c == nil || c.Registry == nil {
+		return true // legacy mode
+	}
+	return c.Registry.HasIDs()
+}
+
 type xmlSensors struct {
 	Items    []xmlSensor  `xml:"item"`
 	Includes []xmlInclude `xml:"http://www.w3.org/2001/XInclude include"`
@@ -205,10 +334,11 @@ type xmlInclude struct {
 }
 
 type xmlSensor struct {
-	ID       int64  `xml:"id,attr"`
-	Name     string `xml:"name,attr"`
-	TextName string `xml:"textname,attr"`
-	IOType   string `xml:"iotype,attr"`
+	ID         int64  `xml:"id,attr"`
+	IDFromFile string `xml:"idfromfile,attr"` // "0" означает, что ID не задан
+	Name       string `xml:"name,attr"`
+	TextName   string `xml:"textname,attr"`
+	IOType     string `xml:"iotype,attr"`
 }
 
 func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
@@ -254,12 +384,34 @@ func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
 }
 func addXMLSensors(cfg *Config, items []xmlSensor) {
 	for _, item := range items {
-		if item.ID == 0 || item.Name == "" {
+		if item.Name == "" {
 			continue
 		}
-		cfg.Sensors[item.Name] = item.ID
+
+		// idfromfile="0" означает, что ID не задан в конфиге
+		var idPtr *int64
+		if item.IDFromFile != "0" && item.ID != 0 {
+			id := item.ID
+			idPtr = &id
+		}
+
+		// Создаём SensorKey и добавляем в Registry
+		key := NewSensorKey(item.Name, idPtr)
+		if err := cfg.Registry.Add(key); err != nil {
+			// Логируем предупреждение о коллизии, пропускаем датчик
+			continue
+		}
+
+		// Сохраняем в Sensors для совместимости
+		if idPtr != nil {
+			cfg.Sensors[item.Name] = *idPtr
+		} else {
+			// Если ID нет, используем hash как ID для совместимости
+			cfg.Sensors[item.Name] = key.Hash
+		}
+
 		cfg.SensorMeta[item.Name] = SensorMeta{
-			ID:       item.ID,
+			ID:       key.Hash, // Используем hash как основной ID
 			TextName: item.TextName,
 			IOType:   item.IOType,
 		}

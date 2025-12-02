@@ -22,7 +22,7 @@ func TestStdoutClientWritesPayload(t *testing.T) {
 		StepTs:     "2024-06-01T00:00:00Z",
 		BatchID:    1,
 		BatchTotal: 1,
-		Updates:    []SensorUpdate{{ID: 42, Value: 3.14}},
+		Updates:    []SensorUpdate{{Hash: 42, Value: 3.14}},
 	}
 	if err := client.Send(context.Background(), payload); err != nil {
 		t.Fatalf("Send returned error: %v", err)
@@ -33,7 +33,7 @@ func TestStdoutClientWritesPayload(t *testing.T) {
 }
 
 func TestBuildSetQueryEmptyUpdates(t *testing.T) {
-	if _, err := buildSetQuery("", nil, nil); err == nil {
+	if _, err := buildSetQuery("", nil, nil, nil); err == nil {
 		t.Fatalf("expected error for empty updates")
 	}
 }

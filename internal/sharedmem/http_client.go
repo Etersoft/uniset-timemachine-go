@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 // HTTPClient отправляет изменения датчиков в SharedMemory HTTP API (/set).
@@ -20,6 +22,7 @@ type HTTPClient struct {
 	HTTP           *http.Client
 	Logger         *log.Logger
 	ParamFormatter ParamFormatter
+	Registry       *config.SensorRegistry // для определения формата параметра (ID или name)
 	Timeout        time.Duration
 	Retry          int
 	WorkerCount    int
@@ -120,7 +123,7 @@ func (c *HTTPClient) set(ctx context.Context, updates []SensorUpdate, batchSize 
 	}
 	for i := 0; i < len(updates); i += batchSize {
 		chunk := updates[i:min(i+batchSize, len(updates))]
-		rawQuery, err := buildSetQuery(c.Supplier, chunk, c.ParamFormatter)
+		rawQuery, err := buildSetQuery(c.Supplier, chunk, c.ParamFormatter, c.Registry)
 		if err != nil {
 			return err
 		}
@@ -145,14 +148,28 @@ func min(a, b int) int {
 	return b
 }
 
-func buildSetQuery(supplier string, updates []SensorUpdate, formatter ParamFormatter) (string, error) {
+// DefaultParamFormatter возвращает форматтер, который использует ID из конфига если есть, иначе name.
+func DefaultParamFormatter(prefix string) ParamFormatter {
+	return func(hash int64, reg *config.SensorRegistry) string {
+		if reg != nil {
+			if key, ok := reg.ByHash(hash); ok {
+				// Требование: "SharedMemory: ID если есть в конфиге, иначе name"
+				if key.ID != nil {
+					return fmt.Sprintf("%s%d", prefix, *key.ID)
+				}
+				return key.Name
+			}
+		}
+		return fmt.Sprintf("%s%d", prefix, hash)
+	}
+}
+
+func buildSetQuery(supplier string, updates []SensorUpdate, formatter ParamFormatter, registry *config.SensorRegistry) (string, error) {
 	if len(updates) == 0 {
 		return "", fmt.Errorf("http client: no updates to send")
 	}
 	if formatter == nil {
-		formatter = func(update SensorUpdate) string {
-			return fmt.Sprintf("id%d", update.ID)
-		}
+		formatter = DefaultParamFormatter("id")
 	}
 
 	var b strings.Builder
@@ -173,9 +190,9 @@ func buildSetQuery(supplier string, updates []SensorUpdate, formatter ParamForma
 		writeParam("supplier", supplier)
 	}
 	for _, upd := range updates {
-		key := formatter(upd)
+		key := formatter(upd.Hash, registry)
 		if key == "" {
-			return "", fmt.Errorf("http client: empty parameter name for sensor %d", upd.ID)
+			return "", fmt.Errorf("http client: empty parameter name for sensor hash %d", upd.Hash)
 		}
 		value := strconv.FormatFloat(upd.Value, 'f', -1, 64)
 		writeParam(key, value)

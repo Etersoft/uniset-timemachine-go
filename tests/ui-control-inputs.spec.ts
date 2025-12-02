@@ -8,9 +8,9 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   // Установим рабочий список датчиков (на случай если UI не успел загрузить).
   const sensorsResp = await page.request.get('/api/v2/sensors');
   const sensors = (await sensorsResp.json())?.sensors ?? [];
-  const ids = sensors.slice(0, 10).map((s: any) => s.id).filter((id: any) => Number.isFinite(Number(id)));
-  if (ids.length) {
-    await page.request.post('/api/v2/job/sensors', { data: { sensors: ids } });
+  const names = sensors.slice(0, 10).map((s: any) => s.name).filter((n: any) => typeof n === 'string' && n.length > 0);
+  if (names.length) {
+    await page.request.post('/api/v2/job/sensors', { data: { sensors: names } });
   }
 
   const statusBadge = page.locator('#statusBadge');

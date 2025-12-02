@@ -7,13 +7,15 @@ import (
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/go-faster/city"
 
 	"github.com/pv/uniset-timemachine-go/internal/storage"
 )
 
+// Resolver для совместимости со старым кодом (работа через name)
 type Resolver interface {
-	NameByID(id int64) (string, bool)
-	IDByName(name string) (int64, bool)
+	NameByHash(hash int64) (string, bool)
+	HashByName(name string) (int64, bool)
 }
 
 type Config struct {
@@ -23,9 +25,10 @@ type Config struct {
 }
 
 type Store struct {
-	conn     ch.Conn
-	table    string
-	resolver Resolver
+	conn       ch.Conn
+	table      string
+	resolver   Resolver
+	useNameHID bool // true если таблица содержит колонку name_hid
 }
 
 const filterTable = "tm_sensors"
@@ -67,7 +70,31 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if !strings.Contains(table, ".") {
 		table = fmt.Sprintf("%s.%s", database, table)
 	}
-	return &Store{conn: conn, table: table, resolver: cfg.Resolver}, nil
+
+	store := &Store{conn: conn, table: table, resolver: cfg.Resolver}
+
+	// Проверяем наличие колонки name_hid в таблице
+	store.useNameHID = store.checkNameHIDColumn(ctx)
+
+	return store, nil
+}
+
+// checkNameHIDColumn проверяет наличие колонки name_hid в таблице.
+func (s *Store) checkNameHIDColumn(ctx context.Context) bool {
+	// Извлекаем database и table из полного имени
+	parts := strings.SplitN(s.table, ".", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	database, tableName := parts[0], parts[1]
+
+	query := `SELECT count() FROM system.columns WHERE database = ? AND table = ? AND name = 'name_hid'`
+	row := s.conn.QueryRow(ctx, query, database, tableName)
+	var count uint64
+	if err := row.Scan(&count); err != nil {
+		return false
+	}
+	return count > 0
 }
 
 func (s *Store) Close() {
@@ -77,37 +104,48 @@ func (s *Store) Close() {
 }
 
 func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]storage.SensorEvent, error) {
-	names, err := s.namesForSensors(sensors)
-	if err != nil {
-		return nil, err
-	}
-	if len(names) == 0 {
+	if len(sensors) == 0 {
 		return nil, nil
 	}
-	if err := s.refreshFilter(ctx, names); err != nil {
+
+	if err := s.refreshFilter(ctx, sensors); err != nil {
 		return nil, err
 	}
 
-	query := fmt.Sprintf(warmupSQL, s.table, filterTable)
+	var query string
+	if s.useNameHID {
+		query = fmt.Sprintf(warmupSQLNameHID, s.table, filterTable)
+	} else {
+		query = fmt.Sprintf(warmupSQLName, s.table, filterTable)
+	}
+
 	rows, err := s.conn.Query(ctx, query, ch.Named("from", from))
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse: warmup query: %w", err)
 	}
 	defer rows.Close()
 
-	events := make([]storage.SensorEvent, 0, len(names))
+	events := make([]storage.SensorEvent, 0, len(sensors))
 	for rows.Next() {
-		var name string
 		var ts time.Time
 		var value float64
-		if err := rows.Scan(&name, &ts, &value); err != nil {
-			return nil, fmt.Errorf("clickhouse: warmup scan: %w", err)
+		var hash int64
+
+		if s.useNameHID {
+			// Читаем name_hid напрямую
+			if err := rows.Scan(&hash, &ts, &value); err != nil {
+				return nil, fmt.Errorf("clickhouse: warmup scan: %w", err)
+			}
+		} else {
+			// Читаем name и конвертируем через cityhash64
+			var name string
+			if err := rows.Scan(&name, &ts, &value); err != nil {
+				return nil, fmt.Errorf("clickhouse: warmup scan: %w", err)
+			}
+			hash = int64(city.Hash64([]byte(name)))
 		}
-		id, ok := s.resolver.IDByName(name)
-		if !ok {
-			continue
-		}
-		events = append(events, storage.SensorEvent{SensorID: id, Timestamp: ts, Value: value})
+
+		events = append(events, storage.SensorEvent{SensorID: hash, Timestamp: ts, Value: value})
 	}
 	return events, rows.Err()
 }
@@ -120,16 +158,11 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 		defer close(dataCh)
 		defer close(errCh)
 
-		names, err := s.namesForSensors(req.Sensors)
-		if err != nil {
-			errCh <- err
-			return
-		}
-		if len(names) == 0 {
+		if len(req.Sensors) == 0 {
 			errCh <- fmt.Errorf("clickhouse: sensors list is empty")
 			return
 		}
-		if err := s.refreshFilter(ctx, names); err != nil {
+		if err := s.refreshFilter(ctx, req.Sensors); err != nil {
 			errCh <- err
 			return
 		}
@@ -139,6 +172,13 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 			window = defaultWindow
 		}
 
+		var query string
+		if s.useNameHID {
+			query = fmt.Sprintf(streamSQLNameHID, s.table, filterTable)
+		} else {
+			query = fmt.Sprintf(streamSQLName, s.table, filterTable)
+		}
+
 		cursor := req.From
 		for cursor.Before(req.To) {
 			next := cursor.Add(window)
@@ -146,7 +186,6 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 				next = req.To
 			}
 
-			query := fmt.Sprintf(streamSQL, s.table, filterTable)
 			rows, err := s.conn.Query(ctx, query, ch.Named("from", cursor), ch.Named("to", next))
 			if err != nil {
 				errCh <- fmt.Errorf("clickhouse: stream query: %w", err)
@@ -154,19 +193,27 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 			}
 			batch := make([]storage.SensorEvent, 0, 256)
 			for rows.Next() {
-				var name string
 				var ts time.Time
 				var value float64
-				if err := rows.Scan(&name, &ts, &value); err != nil {
-					rows.Close()
-					errCh <- fmt.Errorf("clickhouse: stream scan: %w", err)
-					return
+				var hash int64
+
+				if s.useNameHID {
+					if err := rows.Scan(&hash, &ts, &value); err != nil {
+						rows.Close()
+						errCh <- fmt.Errorf("clickhouse: stream scan: %w", err)
+						return
+					}
+				} else {
+					var name string
+					if err := rows.Scan(&name, &ts, &value); err != nil {
+						rows.Close()
+						errCh <- fmt.Errorf("clickhouse: stream scan: %w", err)
+						return
+					}
+					hash = int64(city.Hash64([]byte(name)))
 				}
-				id, ok := s.resolver.IDByName(name)
-				if !ok {
-					continue
-				}
-				batch = append(batch, storage.SensorEvent{SensorID: id, Timestamp: ts, Value: value})
+
+				batch = append(batch, storage.SensorEvent{SensorID: hash, Timestamp: ts, Value: value})
 			}
 			rows.Close()
 			if err := rows.Err(); err != nil {
@@ -192,24 +239,32 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 }
 
 func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
-	names, err := s.namesForSensors(sensors)
-	if err != nil {
-		return time.Time{}, time.Time{}, 0, err
-	}
-	if len(names) == 0 {
+	if len(sensors) == 0 {
 		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: sensors list is empty")
 	}
-	if err := s.refreshFilter(ctx, names); err != nil {
+	if err := s.refreshFilter(ctx, sensors); err != nil {
 		return time.Time{}, time.Time{}, 0, err
 	}
 
-	query := fmt.Sprintf(`
+	var query string
+	if s.useNameHID {
+		query = fmt.Sprintf(`
+SELECT min(timestamp) AS min_ts,
+       max(timestamp) AS max_ts,
+       count(DISTINCT name_hid) AS sensor_count
+FROM %s
+WHERE name_hid IN (SELECT name_hid FROM %s)
+`, s.table, filterTable)
+	} else {
+		query = fmt.Sprintf(`
 SELECT min(timestamp) AS min_ts,
        max(timestamp) AS max_ts,
        count(DISTINCT name) AS sensor_count
 FROM %s
 WHERE name IN (SELECT name FROM %s)
 `, s.table, filterTable)
+	}
+
 	var args []any
 	if !from.IsZero() {
 		query += "  AND timestamp >= ?\n"
@@ -228,13 +283,14 @@ WHERE name IN (SELECT name FROM %s)
 	return minTs, maxTs, int64(count), nil
 }
 
-func (s *Store) namesForSensors(ids []int64) ([]string, error) {
-	names := make([]string, 0, len(ids))
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		name, ok := s.resolver.NameByID(id)
+// hashesToNames конвертирует hashes в names через resolver (для режима без name_hid).
+func (s *Store) hashesToNames(hashes []int64) ([]string, error) {
+	names := make([]string, 0, len(hashes))
+	seen := make(map[string]struct{}, len(hashes))
+	for _, hash := range hashes {
+		name, ok := s.resolver.NameByHash(hash)
 		if !ok || name == "" {
-			return nil, fmt.Errorf("clickhouse: name for sensor %d not found", id)
+			return nil, fmt.Errorf("clickhouse: name for sensor hash %d not found", hash)
 		}
 		if _, exists := seen[name]; exists {
 			continue
@@ -247,10 +303,50 @@ func (s *Store) namesForSensors(ids []int64) ([]string, error) {
 
 const defaultWindow = 5 * time.Second
 
-func (s *Store) refreshFilter(ctx context.Context, names []string) error {
-	if len(names) == 0 {
+// refreshFilter заполняет временную таблицу для фильтрации по датчикам.
+// В зависимости от режима (useNameHID) использует либо name_hid Int64, либо name String.
+func (s *Store) refreshFilter(ctx context.Context, hashes []int64) error {
+	if len(hashes) == 0 {
 		return nil
 	}
+
+	if s.useNameHID {
+		return s.refreshFilterNameHID(ctx, hashes)
+	}
+	return s.refreshFilterName(ctx, hashes)
+}
+
+// refreshFilterNameHID заполняет фильтр по name_hid (Int64).
+func (s *Store) refreshFilterNameHID(ctx context.Context, hashes []int64) error {
+	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE IF NOT EXISTS %s (name_hid Int64)", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: create filter table: %w", err)
+	}
+	if err := s.conn.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: truncate filter table: %w", err)
+	}
+	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s (name_hid)", filterTable))
+	if err != nil {
+		return fmt.Errorf("clickhouse: prepare filter batch: %w", err)
+	}
+	for _, hash := range hashes {
+		if err := batch.Append(hash); err != nil {
+			return fmt.Errorf("clickhouse: append filter hash: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("clickhouse: send filter batch: %w", err)
+	}
+	return nil
+}
+
+// refreshFilterName заполняет фильтр по name (String) - fallback режим.
+func (s *Store) refreshFilterName(ctx context.Context, hashes []int64) error {
+	// Конвертируем hashes в names через resolver
+	names, err := s.hashesToNames(hashes)
+	if err != nil {
+		return err
+	}
+
 	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE IF NOT EXISTS %s (name String)", filterTable)); err != nil {
 		return fmt.Errorf("clickhouse: create filter table: %w", err)
 	}
@@ -272,7 +368,29 @@ func (s *Store) refreshFilter(ctx context.Context, names []string) error {
 	return nil
 }
 
-const warmupSQL = `
+// SQL для режима name_hid (Int64)
+const warmupSQLNameHID = `
+SELECT
+    name_hid,
+    argMax(timestamp, timestamp) AS ts,
+    argMax(value, timestamp) AS value
+FROM %s
+WHERE name_hid IN (SELECT name_hid FROM %s)
+  AND timestamp <= @from
+GROUP BY name_hid;
+`
+
+const streamSQLNameHID = `
+SELECT name_hid, timestamp, value
+FROM %s
+WHERE name_hid IN (SELECT name_hid FROM %s)
+  AND timestamp >= @from
+  AND timestamp < @to
+ORDER BY timestamp, name_hid;
+`
+
+// SQL для режима name (String) - fallback
+const warmupSQLName = `
 SELECT
     name,
     argMax(timestamp, timestamp) AS ts,
@@ -283,7 +401,7 @@ WHERE name IN (SELECT name FROM %s)
 GROUP BY name;
 `
 
-const streamSQL = `
+const streamSQLName = `
 SELECT name, timestamp, value
 FROM %s
 WHERE name IN (SELECT name FROM %s)

@@ -10,18 +10,18 @@ import (
 )
 
 type fakeResolver struct {
-	idToName map[int64]string
-	nameToID map[string]int64
+	hashToName map[int64]string
+	nameToHash map[string]int64
 }
 
-func (r *fakeResolver) NameByID(id int64) (string, bool) {
-	name, ok := r.idToName[id]
+func (r *fakeResolver) NameByHash(hash int64) (string, bool) {
+	name, ok := r.hashToName[hash]
 	return name, ok
 }
 
-func (r *fakeResolver) IDByName(name string) (int64, bool) {
-	id, ok := r.nameToID[name]
-	return id, ok
+func (r *fakeResolver) HashByName(name string) (int64, bool) {
+	hash, ok := r.nameToHash[name]
+	return hash, ok
 }
 
 func TestIsSource(t *testing.T) {
@@ -113,8 +113,8 @@ func TestNewDSNParsing(t *testing.T) {
 	}
 
 	resolver := &fakeResolver{
-		idToName: map[int64]string{1: "Test"},
-		nameToID: map[string]int64{"Test": 1},
+		hashToName: map[int64]string{1: "Test"},
+		nameToHash: map[string]int64{"Test": 1},
 	}
 
 	for _, tt := range tests {
@@ -144,57 +144,57 @@ func containsHelper(s, substr string) bool {
 	return false
 }
 
-func TestNamesForSensors(t *testing.T) {
+func TestHashesToNames(t *testing.T) {
 	resolver := &fakeResolver{
-		idToName: map[int64]string{
+		hashToName: map[int64]string{
 			1: "S1",
 			2: "S2",
 		},
-		nameToID: map[string]int64{
+		nameToHash: map[string]int64{
 			"S1": 1,
 			"S2": 2,
 		},
 	}
 	store := &Store{resolver: resolver}
 
-	names, err := store.namesForSensors([]int64{1, 2, 1})
+	names, err := store.hashesToNames([]int64{1, 2, 1})
 	if err != nil {
-		t.Fatalf("namesForSensors returned error: %v", err)
+		t.Fatalf("hashesToNames returned error: %v", err)
 	}
 	if len(names) != 2 || names[0] != "S1" || names[1] != "S2" {
 		t.Fatalf("unexpected names: %v", names)
 	}
 }
 
-func TestNamesForSensorsMissing(t *testing.T) {
-	store := &Store{resolver: &fakeResolver{idToName: map[int64]string{1: "S1"}, nameToID: map[string]int64{"S1": 1}}}
-	if _, err := store.namesForSensors([]int64{1, 3}); err == nil {
+func TestHashesToNamesMissing(t *testing.T) {
+	store := &Store{resolver: &fakeResolver{hashToName: map[int64]string{1: "S1"}, nameToHash: map[string]int64{"S1": 1}}}
+	if _, err := store.hashesToNames([]int64{1, 3}); err == nil {
 		t.Fatalf("expected error for missing sensor name")
 	}
 }
 
 func TestNewErrors(t *testing.T) {
 	ctx := context.Background()
-	if _, err := New(ctx, Config{DSN: "", Resolver: &fakeResolver{}}); err == nil {
+	if _, err := New(ctx, Config{DSN: "", Resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}); err == nil {
 		t.Fatalf("expected error for empty DSN")
 	}
 	if _, err := New(ctx, Config{DSN: "clickhouse://localhost:9000", Resolver: nil}); err == nil {
 		t.Fatalf("expected error for nil resolver")
 	}
-	if _, err := New(ctx, Config{DSN: "://bad", Resolver: &fakeResolver{}}); err == nil {
+	if _, err := New(ctx, Config{DSN: "://bad", Resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}); err == nil {
 		t.Fatalf("expected error for invalid DSN")
 	}
 }
 
 func TestRangeNamesError(t *testing.T) {
-	store := &Store{resolver: &fakeResolver{}}
+	store := &Store{resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}
 	if _, _, _, err := store.Range(context.Background(), []int64{42}, time.Time{}, time.Time{}); err == nil {
 		t.Fatalf("expected error when resolver misses name")
 	}
 }
 
 func TestStreamNamesError(t *testing.T) {
-	store := &Store{resolver: &fakeResolver{}}
+	store := &Store{resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	_, errCh := store.Stream(ctx, storage.StreamRequest{Sensors: []int64{42}, From: time.Now(), To: time.Now().Add(time.Second)})
@@ -204,14 +204,14 @@ func TestStreamNamesError(t *testing.T) {
 }
 
 func TestWarmupNamesError(t *testing.T) {
-	store := &Store{resolver: &fakeResolver{}}
+	store := &Store{resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}
 	if _, err := store.Warmup(context.Background(), []int64{42}, time.Now()); err == nil {
 		t.Fatalf("expected error when resolver misses name")
 	}
 }
 
 func TestClickhouseEmptySensorsBranches(t *testing.T) {
-	store := &Store{resolver: &fakeResolver{}}
+	store := &Store{resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}}
 
 	// Warmup with empty sensors should short-circuit without error.
 	evs, err := store.Warmup(context.Background(), nil, time.Now())
@@ -253,11 +253,11 @@ func TestStoreWarmupStreamAndRange_Clickhouse(t *testing.T) {
 	}
 
 	resolver := &fakeResolver{
-		idToName: map[int64]string{
+		hashToName: map[int64]string{
 			50: "TestSensor_A",
 			51: "TestSensor_B",
 		},
-		nameToID: map[string]int64{
+		nameToHash: map[string]int64{
 			"TestSensor_A": 50,
 			"TestSensor_B": 51,
 		},
@@ -365,8 +365,8 @@ func TestStreamContextCancel(t *testing.T) {
 	defer cancel()
 
 	resolver := &fakeResolver{
-		idToName: map[int64]string{50: "TestSensor_A"},
-		nameToID: map[string]int64{"TestSensor_A": 50},
+		hashToName: map[int64]string{50: "TestSensor_A"},
+		nameToHash: map[string]int64{"TestSensor_A": 50},
 	}
 
 	rows := []chHistoryRow{
@@ -409,8 +409,8 @@ func TestClose(t *testing.T) {
 
 	ctx := context.Background()
 	resolver := &fakeResolver{
-		idToName: map[int64]string{50: "TestSensor_A"},
-		nameToID: map[string]int64{"TestSensor_A": 50},
+		hashToName: map[int64]string{50: "TestSensor_A"},
+		nameToHash: map[string]int64{"TestSensor_A": 50},
 	}
 
 	store, err := New(ctx, Config{DSN: dsn, Resolver: resolver})
@@ -437,7 +437,7 @@ type chHistoryRow struct {
 func setupClickhouseFixtures(t *testing.T, ctx context.Context, dsn string, rows []chHistoryRow) {
 	t.Helper()
 
-	resolver := &fakeResolver{}
+	resolver := &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}
 	store, err := New(ctx, Config{DSN: dsn, Resolver: resolver})
 	if err != nil {
 		t.Fatalf("clickhouse.New for setup: %v", err)
@@ -485,7 +485,7 @@ ORDER BY (timestamp, name)`
 	t.Cleanup(func() {
 		ctxCleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		cleanStore, err := New(ctxCleanup, Config{DSN: dsn, Resolver: &fakeResolver{}})
+		cleanStore, err := New(ctxCleanup, Config{DSN: dsn, Resolver: &fakeResolver{hashToName: map[int64]string{}, nameToHash: map[string]int64{}}})
 		if err != nil {
 			return
 		}

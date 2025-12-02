@@ -228,7 +228,14 @@ func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors 
 	}
 
 	if postgres.IsPostgresURL(opts.dbURL) {
-		pgStore, err := postgres.New(ctx, postgres.Config{ConnString: opts.dbURL})
+		// PostgreSQL требует ID в конфиге
+		if cfg != nil && cfg.Registry != nil && !cfg.Registry.HasIDs() {
+			log.Fatalf("postgres storage requires sensor IDs in config (idfromfile != 0 for all sensors)")
+		}
+		pgStore, err := postgres.New(ctx, postgres.Config{
+			ConnString: opts.dbURL,
+			Registry:   cfg.Registry,
+		})
 		if err != nil {
 			log.Fatalf("postgres storage error: %v", err)
 		}
@@ -236,9 +243,14 @@ func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors 
 	}
 
 	if sqliteStore.IsSource(opts.dbURL) {
+		// SQLite требует ID в конфиге
+		if cfg != nil && cfg.Registry != nil && !cfg.Registry.HasIDs() {
+			log.Fatalf("sqlite storage requires sensor IDs in config (idfromfile != 0 for all sensors)")
+		}
 		src := sqliteStore.NormalizeSource(opts.dbURL)
 		sqlite, err := sqliteStore.New(ctx, sqliteStore.Config{
-			Source: src,
+			Source:   src,
+			Registry: cfg.Registry,
 			Pragmas: sqliteStore.Pragmas{
 				CacheMB:    opts.sqliteCacheMB,
 				WAL:        opts.sqliteWAL,
@@ -280,22 +292,31 @@ func printRange(ctx context.Context, store storage.Storage, sensors []int64) {
 	fmt.Printf("Available range: %s → %s (sensors: %d)\n", min.Format(time.RFC3339), max.Format(time.RFC3339), count)
 }
 
+// configResolver реализует интерфейс clickhouse.Resolver для работы с хешами.
 type configResolver struct {
 	cfg *config.Config
 }
 
-func (r configResolver) NameByID(id int64) (string, bool) {
-	if r.cfg == nil {
+func (r configResolver) NameByHash(hash int64) (string, bool) {
+	if r.cfg == nil || r.cfg.Registry == nil {
 		return "", false
 	}
-	return r.cfg.NameByID(id)
+	key, ok := r.cfg.Registry.ByHash(hash)
+	if !ok {
+		return "", false
+	}
+	return key.Name, true
 }
 
-func (r configResolver) IDByName(name string) (int64, bool) {
-	if r.cfg == nil {
+func (r configResolver) HashByName(name string) (int64, bool) {
+	if r.cfg == nil || r.cfg.Registry == nil {
 		return 0, false
 	}
-	return r.cfg.IDByName(name)
+	key, ok := r.cfg.Registry.ByName(name)
+	if !ok {
+		return 0, false
+	}
+	return key.Hash, true
 }
 
 func findConfigYAML(args []string) string {
@@ -353,10 +374,15 @@ func initOutputClient(opt options, cfg *config.Config) sharedmem.Client {
 			logger = log.New(log.Writer(), "[sm] ", log.Flags())
 		}
 		paramFormatter := makeParamFormatter(opt, cfg)
+		var registry *config.SensorRegistry
+		if cfg != nil {
+			registry = cfg.Registry
+		}
 		return &sharedmem.HTTPClient{
 			BaseURL:        rawOut,
 			Supplier:       opt.smSupplier,
 			ParamFormatter: paramFormatter,
+			Registry:       registry,
 			Logger:         logger,
 			BatchSize:      opt.batchSize,
 		}
@@ -365,24 +391,34 @@ func initOutputClient(opt options, cfg *config.Config) sharedmem.Client {
 	return nil
 }
 
+// makeParamFormatter создаёт форматтер для SharedMemory параметров.
+// Устаревшая функция - теперь используется sharedmem.DefaultParamFormatter.
 func makeParamFormatter(opt options, cfg *config.Config) sharedmem.ParamFormatter {
 	mode := strings.ToLower(opt.smParamMode)
 	prefix := opt.smParamPrefix
+
+	// Если используется новый режим с Registry, делегируем DefaultParamFormatter
+	if cfg != nil && cfg.Registry != nil {
+		// По умолчанию используем режим "id" - возвращает configID если есть, иначе name
+		return sharedmem.DefaultParamFormatter(prefix)
+	}
+
+	// Legacy режим для совместимости
 	switch mode {
 	case "id", "":
-		return func(update sharedmem.SensorUpdate) string {
-			return fmt.Sprintf("%s%d", prefix, update.ID)
+		return func(hash int64, _ *config.SensorRegistry) string {
+			return fmt.Sprintf("%s%d", prefix, hash)
 		}
 	case "name":
 		idToName := make(map[int64]string, len(cfg.Sensors))
 		for name, id := range cfg.Sensors {
 			idToName[id] = name
 		}
-		return func(update sharedmem.SensorUpdate) string {
-			if name, ok := idToName[update.ID]; ok && name != "" {
+		return func(hash int64, _ *config.SensorRegistry) string {
+			if name, ok := idToName[hash]; ok && name != "" {
 				return name
 			}
-			return fmt.Sprintf("%s%d", prefix, update.ID)
+			return fmt.Sprintf("%s%d", prefix, hash)
 		}
 	default:
 		log.Fatalf("unsupported --sm-param-mode value: %s", opt.smParamMode)

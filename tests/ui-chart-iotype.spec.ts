@@ -6,9 +6,9 @@ test('AI/AO идут на основной график, DI/DO — на диск
   await page.request.post('/api/v2/job/reset');
   const sensorsResp = await page.request.get('/api/v2/sensors');
   const sensorsJson = await sensorsResp.json();
-  const list: Array<{ id: number; name?: string; iotype?: string; textname?: string }> = sensorsJson?.sensors || [];
+  const list: Array<{ name: string; iotype?: string; textname?: string }> = sensorsJson?.sensors || [];
 
-  const pickLabel = (s: { id: number; name?: string }) => (s.name ? `${s.name} (${s.id})` : `${s.id}`);
+  const pickLabel = (s: { name: string }) => s.name;
 
   const analog = list.find((s) => ['AI', 'AO'].includes((s.iotype || '').toUpperCase()));
   const discrete = list.find((s) => ['DI', 'DO'].includes((s.iotype || '').toUpperCase()));
@@ -16,27 +16,38 @@ test('AI/AO идут на основной график, DI/DO — на диск
 
   test.skip(!analog || !discrete, 'Нужны хотя бы один AI/AO и один DI/DO в конфиге');
 
-  const workingIds = [analog?.id, discrete?.id, unknown?.id].filter((v): v is number => Number.isFinite(v));
-  if (workingIds.length) {
-    await page.request.post('/api/v2/job/sensors', { data: { sensors: workingIds } });
+  const workingNames = [analog?.name, discrete?.name, unknown?.name].filter((v): v is string => typeof v === 'string' && v.length > 0);
+  if (workingNames.length) {
+    await page.request.post('/api/v2/job/sensors', { data: { sensors: workingNames } });
   }
 
   const analogLabel = pickLabel(analog!);
   const discreteLabel = pickLabel(discrete!);
   const unknownLabel = unknown ? pickLabel(unknown) : null;
 
-  await page.goto('/ui/');
+  // Перезагружаем страницу чтобы UI подхватил новый рабочий список
+  await page.reload();
+  await page.waitForSelector('#workingMeta');
+  // Ждём пока метка покажет что рабочий список загружен (не "загружаем...")
+  await page.waitForFunction(
+    () => {
+      const meta = document.querySelector('#workingMeta');
+      return meta && meta.textContent && !meta.textContent.includes('загружаем');
+    },
+    { timeout: 10_000 },
+  );
+
   await page.getByRole('button', { name: 'Датчики' }).click();
   await page.waitForFunction(() => document.querySelectorAll('#tableBody tr').length > 0, { timeout: 8_000 });
 
-  const addBtn = (id: number) => page.locator(`#tableBody button[data-chart-add="${id}"]`);
-  await expect(addBtn(analog!.id)).toBeVisible({ timeout: 4_000 });
-  await addBtn(analog!.id).click();
-  await expect(addBtn(discrete!.id)).toBeVisible({ timeout: 4_000 });
-  await addBtn(discrete!.id).click();
+  const addBtn = (name: string) => page.locator(`#tableBody button[data-chart-add="${name}"]`);
+  await expect(addBtn(analog!.name)).toBeVisible({ timeout: 4_000 });
+  await addBtn(analog!.name).click();
+  await expect(addBtn(discrete!.name)).toBeVisible({ timeout: 4_000 });
+  await addBtn(discrete!.name).click();
   if (unknown) {
-    if (await addBtn(unknown.id).isVisible()) {
-      await addBtn(unknown.id).click();
+    if (await addBtn(unknown.name).isVisible()) {
+      await addBtn(unknown.name).click();
     }
   }
 
@@ -44,12 +55,12 @@ test('AI/AO идут на основной график, DI/DO — на диск
   await page.waitForTimeout(1000);
 
   const types = await page.evaluate(
-    ({ analogId, discreteId, unknownId }) => ({
-      analog: (window as any).getSensorType?.(analogId),
-      discrete: (window as any).getSensorType?.(discreteId),
-      unknown: unknownId ? (window as any).getSensorType?.(unknownId) : null,
+    ({ analogName, discreteName, unknownName }) => ({
+      analog: (window as any).getSensorType?.(analogName),
+      discrete: (window as any).getSensorType?.(discreteName),
+      unknown: unknownName ? (window as any).getSensorType?.(unknownName) : null,
     }),
-    { analogId: analog!.id, discreteId: discrete!.id, unknownId: unknown?.id ?? null },
+    { analogName: analog!.name, discreteName: discrete!.name, unknownName: unknown?.name ?? null },
   );
 
   const { main, step, legend, builtStep, stepExists, stepCanvasExists } = await page.evaluate(() => {

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/pv/uniset-timemachine-go/internal/storage"
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 const defaultWindow = time.Minute
@@ -17,15 +18,22 @@ const defaultWindow = time.Minute
 type Config struct {
 	ConnString string
 	MaxConns   int32
+	Registry   *config.SensorRegistry // реестр датчиков для конвертации hash↔configID
 }
 
 type Store struct {
-	pool *pgxpool.Pool
+	pool     *pgxpool.Pool
+	registry *config.SensorRegistry
 }
 
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.ConnString == "" {
 		return nil, fmt.Errorf("postgres: connection string is empty")
+	}
+
+	// PostgreSQL требует ID в конфиге для работы с таблицей main_history
+	if cfg.Registry != nil && !cfg.Registry.HasIDs() {
+		return nil, fmt.Errorf("postgres: config must have sensor IDs (idfromfile != 0 for all sensors)")
 	}
 
 	poolCfg, err := pgxpool.ParseConfig(cfg.ConnString)
@@ -42,7 +50,8 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	}
 
 	return &Store{
-		pool: pool,
+		pool:     pool,
+		registry: cfg.Registry,
 	}, nil
 }
 
@@ -52,16 +61,52 @@ func (s *Store) Close() {
 	}
 }
 
+// hashToConfigIDs конвертирует hashes в configIDs для SQL запросов.
+func (s *Store) hashToConfigIDs(hashes []int64) ([]int64, error) {
+	if s.registry == nil {
+		return hashes, nil // legacy mode - hashes уже являются configIDs
+	}
+	result := make([]int64, 0, len(hashes))
+	for _, h := range hashes {
+		key, ok := s.registry.ByHash(h)
+		if !ok {
+			return nil, fmt.Errorf("postgres: sensor hash %d not found in registry", h)
+		}
+		if key.ID == nil {
+			return nil, fmt.Errorf("postgres: sensor %q has no config ID", key.Name)
+		}
+		result = append(result, *key.ID)
+	}
+	return result, nil
+}
+
+// configIDToHash конвертирует configID из результата SQL в hash.
+func (s *Store) configIDToHash(configID int64) int64 {
+	if s.registry == nil {
+		return configID // legacy mode
+	}
+	if key, ok := s.registry.ByConfigID(configID); ok {
+		return key.Hash
+	}
+	return configID // fallback
+}
+
 func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]storage.SensorEvent, error) {
 	if len(sensors) == 0 {
 		return nil, nil
+	}
+
+	// Конвертируем hashes в configIDs для SQL запроса
+	configIDs, err := s.hashToConfigIDs(sensors)
+	if err != nil {
+		return nil, err
 	}
 
 	fromDate := from.Format("2006-01-02")
 	fromTime := from.Format("15:04:05")
 	fromUsec := from.Nanosecond() / 1000
 
-	rows, err := s.pool.Query(ctx, warmupSQL, sensorsAsArray(sensors), fromDate, fromTime, fromUsec)
+	rows, err := s.pool.Query(ctx, warmupSQL, sensorsAsArray(configIDs), fromDate, fromTime, fromUsec)
 	if err != nil {
 		return nil, fmt.Errorf("postgres: warmup query: %w", err)
 	}
@@ -78,7 +123,7 @@ func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]
 			return nil, fmt.Errorf("postgres: warmup scan: %w", err)
 		}
 		result = append(result, storage.SensorEvent{
-			SensorID:  sensorID,
+			SensorID:  s.configIDToHash(sensorID), // конвертируем в hash
 			Timestamp: combineDateTimeUsec(date, timeStr, usec),
 			Value:     value,
 		})
@@ -96,6 +141,13 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 
 		if len(req.Sensors) == 0 {
 			errCh <- fmt.Errorf("postgres: stream sensors list is empty")
+			return
+		}
+
+		// Конвертируем hashes в configIDs для SQL запроса
+		configIDs, err := s.hashToConfigIDs(req.Sensors)
+		if err != nil {
+			errCh <- err
 			return
 		}
 
@@ -123,7 +175,7 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 			nextTime := next.Format("15:04:05")
 			nextUsec := next.Nanosecond() / 1000
 
-			rows, err := s.pool.Query(ctx, windowSQL, sensorsAsArray(req.Sensors),
+			rows, err := s.pool.Query(ctx, windowSQL, sensorsAsArray(configIDs),
 				cursorDate, cursorTime, cursorUsec,
 				nextDate, nextTime, nextUsec)
 			if err != nil {
@@ -144,7 +196,7 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 					return
 				}
 				chunk = append(chunk, storage.SensorEvent{
-					SensorID:  sensorID,
+					SensorID:  s.configIDToHash(sensorID), // конвертируем в hash
 					Timestamp: combineDateTimeUsec(date, timeStr, usec),
 					Value:     value,
 				})
@@ -198,6 +250,12 @@ func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) 
 		return time.Time{}, time.Time{}, 0, fmt.Errorf("postgres: sensors list is empty")
 	}
 
+	// Конвертируем hashes в configIDs для SQL запроса
+	configIDs, err := s.hashToConfigIDs(sensors)
+	if err != nil {
+		return time.Time{}, time.Time{}, 0, err
+	}
+
 	var fromDate, toDate *string
 
 	if !from.IsZero() {
@@ -209,7 +267,7 @@ func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) 
 		toDate = &td
 	}
 
-	row := s.pool.QueryRow(ctx, rangeSQL, sensorsAsArray(sensors), fromDate, toDate)
+	row := s.pool.QueryRow(ctx, rangeSQL, sensorsAsArray(configIDs), fromDate, toDate)
 	var minDate, maxDate *time.Time
 	var minTime, maxTime *string
 	var minUsec, maxUsec *int

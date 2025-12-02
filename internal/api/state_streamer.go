@@ -21,11 +21,14 @@ import (
 )
 
 // SensorInfo описывает метаданные датчика для стриминга в UI.
+// Name используется как primary key для обмена с UI (вместо hash).
 type SensorInfo struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
+	ID       int64  `json:"id"`                  // cityhash64(name) — для совместимости
+	Name     string `json:"name"`                // primary key для UI
+	ConfigID *int64 `json:"config_id,omitempty"` // ID из конфига (если есть)
 	TextName string `json:"textname,omitempty"`
 	IOType   string `json:"iotype,omitempty"`
+	Hash     int64  `json:"-"` // внутренний идентификатор (не передаётся в JSON)
 }
 
 type sensorValue struct {
@@ -45,14 +48,15 @@ type wsMessage struct {
 	Updates  []wsSensorRow `json:"updates,omitempty"`
 	ControllerPresent bool `json:"controller_present,omitempty"`
 	ControlTimeoutSec int  `json:"control_timeout_sec,omitempty"`
-	// U — компактный формат обновлений: [id, value, hasValue(0/1)]
-	U [][]float64 `json:"u,omitempty"`
+	// U — компактный формат обновлений: {name: [value, hasValue(0/1)]}
+	U map[string][]float64 `json:"u,omitempty"`
 }
 
 type wsSensorRow struct {
-	ID       int64   `json:"id"`
-	Name     string  `json:"name,omitempty"`     // snapshot only
-	TextName string  `json:"textname,omitempty"` // snapshot only
+	Name     string  `json:"name"`                // primary key для UI
+	ConfigID *int64  `json:"config_id,omitempty"` // ID из конфига (если есть)
+	TextName string  `json:"textname,omitempty"`  // snapshot only
+	IOType   string  `json:"iotype,omitempty"`    // snapshot only
 	Value    float64 `json:"value,omitempty"`
 	HasValue bool    `json:"has_value,omitempty"`
 }
@@ -60,14 +64,14 @@ type wsSensorRow struct {
 // StateStreamer копит состояние датчиков и отдаёт изменения через WebSocket.
 type StateStreamer struct {
 	mu      sync.RWMutex
-	sensors map[int64]SensorInfo
-	state   map[int64]*sensorValue
+	sensors map[int64]SensorInfo  // hash → SensorInfo
+	state   map[int64]*sensorValue // hash → value
 	clients map[*wsClient]struct{}
 	lastID  int64
 	lastTs  time.Time
 
 	batchInterval time.Duration
-	batchRows     map[int64]wsSensorRow
+	batchRows     map[string]wsSensorRow // name → row
 	batchStep     replay.StepInfo
 	batchTimer    *time.Timer
 
@@ -84,7 +88,7 @@ func NewStateStreamer(batchInterval time.Duration) *StateStreamer {
 		state:         map[int64]*sensorValue{},
 		clients:       map[*wsClient]struct{}{},
 		batchInterval: batchInterval,
-		batchRows:     map[int64]wsSensorRow{},
+		batchRows:     map[string]wsSensorRow{},
 	}
 }
 
@@ -95,29 +99,39 @@ func (s *StateStreamer) SetControlStatusProvider(fn func() (bool, int)) {
 	s.controlStatus = fn
 }
 
-// BuildSensorInfo подготавливает карту ID → SensorInfo из конфига.
-func BuildSensorInfo(cfg *config.Config, ids []int64) map[int64]SensorInfo {
-	seen := make(map[int64]struct{}, len(ids))
-	infos := make(map[int64]SensorInfo, len(ids))
-	for _, id := range ids {
-		if _, exists := seen[id]; exists {
+// BuildSensorInfo подготавливает карту hash → SensorInfo из конфига.
+// hashes содержит список хешей датчиков (cityhash64(name)).
+func BuildSensorInfo(cfg *config.Config, hashes []int64) map[int64]SensorInfo {
+	seen := make(map[int64]struct{}, len(hashes))
+	infos := make(map[int64]SensorInfo, len(hashes))
+	for _, hash := range hashes {
+		if _, exists := seen[hash]; exists {
 			continue
 		}
-		seen[id] = struct{}{}
+		seen[hash] = struct{}{}
+
 		var name string
+		var configID *int64
 		var meta config.SensorMeta
-		if cfg != nil {
-			name, _ = cfg.NameByID(id)
-			meta = cfg.SensorMeta[name]
+
+		if cfg != nil && cfg.Registry != nil {
+			if key, ok := cfg.Registry.ByHash(hash); ok {
+				name = key.Name
+				configID = key.ID
+				meta = cfg.SensorMeta[name]
+			}
 		}
 		if name == "" {
-			name = fmt.Sprintf("id%d", id)
+			name = fmt.Sprintf("hash%d", hash)
 		}
-		infos[id] = SensorInfo{
-			ID:       id,
+
+		infos[hash] = SensorInfo{
+			ID:       hash, // cityhash64(name) для совместимости
 			Name:     name,
+			ConfigID: configID,
 			TextName: meta.TextName,
 			IOType:   meta.IOType,
+			Hash:     hash,
 		}
 	}
 	return infos
@@ -130,7 +144,7 @@ func (s *StateStreamer) Reset(infos map[int64]SensorInfo) {
 	s.state = map[int64]*sensorValue{}
 	s.lastID = 0
 	s.lastTs = time.Time{}
-	s.batchRows = map[int64]wsSensorRow{}
+	s.batchRows = map[string]wsSensorRow{}
 	if s.batchTimer != nil {
 		s.batchTimer.Stop()
 	}
@@ -149,15 +163,15 @@ func (s *StateStreamer) Publish(step replay.StepInfo, updates []sharedmem.Sensor
 
 	rows := make([]wsSensorRow, 0, len(updates))
 	for _, upd := range updates {
-		info, ok := s.sensors[upd.ID]
+		info, ok := s.sensors[upd.Hash]
 		if !ok {
-			info = SensorInfo{ID: upd.ID, Name: fmt.Sprintf("id%d", upd.ID)}
-			s.sensors[upd.ID] = info
+			info = SensorInfo{Hash: upd.Hash, Name: fmt.Sprintf("hash%d", upd.Hash)}
+			s.sensors[upd.Hash] = info
 		}
-		val := s.state[upd.ID]
+		val := s.state[upd.Hash]
 		if val == nil {
 			val = &sensorValue{info: info}
-			s.state[upd.ID] = val
+			s.state[upd.Hash] = val
 		}
 		val.info = info
 		val.value = upd.Value
@@ -167,14 +181,14 @@ func (s *StateStreamer) Publish(step replay.StepInfo, updates []sharedmem.Sensor
 		val.lastChanged = step.StepTs
 
 		rows = append(rows, wsSensorRow{
-			ID:       info.ID,
+			Name:     info.Name,
 			Value:    upd.Value,
 			HasValue: true,
 		})
 	}
 
 	for _, r := range rows {
-		s.batchRows[r.ID] = r
+		s.batchRows[r.Name] = r
 	}
 	s.batchStep = step
 	if s.batchTimer == nil {
@@ -225,7 +239,7 @@ func (s *StateStreamer) ListSensors() []SensorInfo {
 	}
 	sort.Slice(list, func(i, j int) bool {
 		if list[i].Name == list[j].Name {
-			return list[i].ID < list[j].ID
+			return list[i].Hash < list[j].Hash
 		}
 		return list[i].Name < list[j].Name
 	})
@@ -244,12 +258,13 @@ func (s *StateStreamer) snapshotMessage() wsMessage {
 	defer s.mu.RUnlock()
 
 	rows := make([]wsSensorRow, 0, len(s.sensors))
-	for id, info := range s.sensors {
-		val := s.state[id]
+	for hash, info := range s.sensors {
+		val := s.state[hash]
 		row := wsSensorRow{
-			ID:       info.ID,
 			Name:     info.Name,
+			ConfigID: info.ConfigID,
 			TextName: info.TextName,
+			IOType:   info.IOType,
 			HasValue: val != nil && val.hasValue,
 		}
 		if val != nil && val.hasValue {
@@ -258,9 +273,6 @@ func (s *StateStreamer) snapshotMessage() wsMessage {
 		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].Name == rows[j].Name {
-			return rows[i].ID < rows[j].ID
-		}
 		return rows[i].Name < rows[j].Name
 	})
 
@@ -344,7 +356,7 @@ func (s *StateStreamer) flushBatch() {
 		rows = append(rows, r)
 	}
 	// сбросим на следующий батч
-	s.batchRows = map[int64]wsSensorRow{}
+	s.batchRows = map[string]wsSensorRow{}
 	if s.batchTimer != nil {
 		s.batchTimer.Stop()
 	}
@@ -366,13 +378,13 @@ func (s *StateStreamer) flushBatch() {
 	}
 
 	if len(rows) > 0 {
-		msg.U = make([][]float64, 0, len(rows))
+		msg.U = make(map[string][]float64, len(rows))
 		for _, r := range rows {
 			has := 0.0
 			if r.HasValue {
 				has = 1.0
 			}
-			msg.U = append(msg.U, []float64{float64(r.ID), r.Value, has})
+			msg.U[r.Name] = []float64{r.Value, has}
 		}
 		// Только если есть строки — рассылаем. Пустые батчи не трогаем, чтобы не будить клиентов.
 		s.broadcastLocked(msg)

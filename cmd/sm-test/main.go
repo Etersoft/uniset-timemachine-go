@@ -17,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 type options struct {
@@ -42,14 +43,14 @@ func main() {
 	client := &sharedmem.HTTPClient{
 		BaseURL:  opts.smURL,
 		Supplier: opts.supplier,
-		ParamFormatter: func(u sharedmem.SensorUpdate) string {
-			return strconv.FormatInt(u.ID, 10)
+		ParamFormatter: func(hash int64, _ *config.SensorRegistry) string {
+			return strconv.FormatInt(hash, 10)
 		},
 	}
 	payload := sharedmem.StepPayload{
 		StepID: 1,
 		Updates: []sharedmem.SensorUpdate{
-			{ID: opts.sensorID, Value: opts.value},
+			{Hash: opts.sensorID, Value: opts.value},
 		},
 	}
 	if err := client.Send(ctx, payload); err != nil {

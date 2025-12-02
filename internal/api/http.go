@@ -292,14 +292,16 @@ func (s *Server) handleSensors(w http.ResponseWriter, r *http.Request) {
 }
 
 type jobSensorsRequest struct {
-	Sensors []int64 `json:"sensors"`
+	Sensors []string `json:"sensors"` // sensor names
 }
 
 // handleJobSensors управляет текущим рабочим списком датчиков.
+// GET: возвращает текущий рабочий список имён датчиков.
+// POST: устанавливает рабочий список по именам датчиков.
 func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		current := s.manager.WorkingSensors()
+		current := s.manager.WorkingSensorNames()
 		all := s.manager.Sensors()
 		defaultSet := len(current) == len(all)
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -320,13 +322,13 @@ func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, fmt.Errorf("no sensors provided"))
 			return
 		}
-		accepted, rejected, err := s.manager.SetWorkingSensors(req.Sensors)
+		accepted, rejected, err := s.manager.SetWorkingSensorsByNames(req.Sensors)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
 			return
 		}
+		working := s.manager.WorkingSensorNames()
 		all := s.manager.Sensors()
-		working := s.manager.WorkingSensors()
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":         "ok",
 			"sensors":        working,

@@ -12,7 +12,7 @@ import (
 type StateSnapshot struct {
 	StepID int64
 	StepTs time.Time
-	Values map[int64]float64
+	Values map[int64]float64 // hash (cityhash64(name)) → значение
 }
 
 // BuildState рассчитывает состояние датчиков на указанный момент времени, не выполняя отправку.

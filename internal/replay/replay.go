@@ -12,7 +12,7 @@ import (
 
 // Params описывает настройки воспроизведения.
 type Params struct {
-	Sensors    []int64
+	Sensors    []int64 // список хешей датчиков (cityhash64(name))
 	From       time.Time
 	To         time.Time
 	Step       time.Duration
@@ -340,10 +340,10 @@ func applyPending(state map[int64]*sensorState, pending []storage.SensorEvent, c
 
 func collectUpdates(state map[int64]*sensorState) []sharedmem.SensorUpdate {
 	updates := make([]sharedmem.SensorUpdate, 0)
-	for id, st := range state {
+	for hash, st := range state {
 		if st.dirty && st.hasValue {
 			updates = append(updates, sharedmem.SensorUpdate{
-				ID:    id,
+				Hash:  hash,
 				Value: st.value,
 			})
 			st.dirty = false
@@ -806,9 +806,9 @@ func restoreState(
 }
 func sendFullSnapshot(ctx context.Context, s *Service, params Params, state map[int64]*sensorState, stepID *int64, stepTs *time.Time, saveOutput bool) error {
 	updates := make([]sharedmem.SensorUpdate, 0, len(state))
-	for id, st := range state {
+	for hash, st := range state {
 		if st.hasValue {
-			updates = append(updates, sharedmem.SensorUpdate{ID: id, Value: st.value})
+			updates = append(updates, sharedmem.SensorUpdate{Hash: hash, Value: st.value})
 		}
 	}
 	if len(updates) == 0 {

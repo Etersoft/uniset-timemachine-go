@@ -235,8 +235,9 @@ func TestJobSensorsEndpoints(t *testing.T) {
 		t.Fatalf("default flag unexpected: %v", getBody["default"])
 	}
 
-	// Set subset with one valid, one invalid.
-	resp := postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []int64{1, 99}})
+	// Set subset with one valid, one invalid (using sensor names).
+	// Without config, sensors with hashes 1 and 2 have names "hash1" and "hash2".
+	resp := postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []string{"hash1", "invalid_name"}})
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -257,7 +258,7 @@ func TestJobSensorsEndpoints(t *testing.T) {
 	}
 
 	// Invalid only -> expect 400
-	resp = postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []int64{99}})
+	resp = postJSON(t, ts.URL+"/api/v2/job/sensors", map[string]any{"sensors": []string{"invalid_sensor"}})
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("set invalid sensors status=%d, want 400", resp.StatusCode)
 	}

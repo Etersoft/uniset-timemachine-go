@@ -11,6 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 
 	"github.com/pv/uniset-timemachine-go/internal/storage"
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 const (
@@ -19,8 +20,9 @@ const (
 )
 
 type Config struct {
-	Source  string
-	Pragmas Pragmas
+	Source   string
+	Pragmas  Pragmas
+	Registry *config.SensorRegistry // реестр датчиков для конвертации hash↔configID
 }
 
 // Pragmas настраивают кеш и режимы SQLite.
@@ -35,12 +37,19 @@ type Store struct {
 	db         *sql.DB
 	stmtWarmup *sql.Stmt
 	stmtWindow *sql.Stmt
+	registry   *config.SensorRegistry
 }
 
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.Source == "" {
 		return nil, fmt.Errorf("sqlite: database path is empty")
 	}
+
+	// SQLite требует ID в конфиге для работы с таблицей main_history
+	if cfg.Registry != nil && !cfg.Registry.HasIDs() {
+		return nil, fmt.Errorf("sqlite: config must have sensor IDs (idfromfile != 0 for all sensors)")
+	}
+
 	db, err := sql.Open("sqlite", cfg.Source)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open: %w", err)
@@ -53,7 +62,7 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, registry: cfg.Registry}
 	if err := store.ensureFilterTable(ctx); err != nil {
 		db.Close()
 		return nil, err
@@ -81,7 +90,38 @@ func (s *Store) Close() {
 	}
 }
 
+// hashToConfigIDs конвертирует hashes в configIDs для SQL запросов.
+func (s *Store) hashToConfigIDs(hashes []int64) ([]int64, error) {
+	if s.registry == nil {
+		return hashes, nil // legacy mode - hashes уже являются configIDs
+	}
+	result := make([]int64, 0, len(hashes))
+	for _, h := range hashes {
+		key, ok := s.registry.ByHash(h)
+		if !ok {
+			return nil, fmt.Errorf("sqlite: sensor hash %d not found in registry", h)
+		}
+		if key.ID == nil {
+			return nil, fmt.Errorf("sqlite: sensor %q has no config ID", key.Name)
+		}
+		result = append(result, *key.ID)
+	}
+	return result, nil
+}
+
+// configIDToHash конвертирует configID из результата SQL в hash.
+func (s *Store) configIDToHash(configID int64) int64 {
+	if s.registry == nil {
+		return configID // legacy mode
+	}
+	if key, ok := s.registry.ByConfigID(configID); ok {
+		return key.Hash
+	}
+	return configID // fallback
+}
+
 func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]storage.SensorEvent, error) {
+	// resetFilter уже конвертирует hashes в configIDs
 	if err := s.resetFilter(ctx, sensors); err != nil {
 		return nil, err
 	}
@@ -107,7 +147,7 @@ func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]
 			return nil, err
 		}
 		events = append(events, storage.SensorEvent{
-			SensorID:  sensorID,
+			SensorID:  s.configIDToHash(sensorID), // конвертируем в hash
 			Timestamp: parsed,
 			Value:     value,
 		})
@@ -123,6 +163,7 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 		defer close(dataCh)
 		defer close(errCh)
 
+		// resetFilter уже конвертирует hashes в configIDs
 		if err := s.resetFilter(ctx, req.Sensors); err != nil {
 			errCh <- err
 			return
@@ -164,7 +205,7 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 					return
 				}
 				chunk = append(chunk, storage.SensorEvent{
-					SensorID:  sensorID,
+					SensorID:  s.configIDToHash(sensorID), // конвертируем в hash
 					Timestamp: parsed,
 					Value:     value,
 				})
@@ -237,6 +278,13 @@ func (s *Store) resetFilter(ctx context.Context, sensors []int64) error {
 	if len(sensors) == 0 {
 		return nil
 	}
+
+	// Конвертируем hashes в configIDs для SQL запросов
+	configIDs, err := s.hashToConfigIDs(sensors)
+	if err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite: begin tx: %w", err)
@@ -246,7 +294,7 @@ func (s *Store) resetFilter(ctx context.Context, sensors []int64) error {
 		tx.Rollback()
 		return fmt.Errorf("sqlite: prepare insert: %w", err)
 	}
-	for _, id := range sensors {
+	for _, id := range configIDs {
 		if _, err := stmt.ExecContext(ctx, id); err != nil {
 			stmt.Close()
 			tx.Rollback()

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 type roundTripFunc func(req *http.Request) (*http.Response, error)
@@ -43,8 +45,8 @@ func TestHTTPClientSendBuildsSetRequest(t *testing.T) {
 	payload := StepPayload{
 		StepID: 1,
 		Updates: []SensorUpdate{
-			{ID: 42, Value: 10.5},
-			{ID: 77, Value: 0},
+			{Hash: 42, Value: 10.5},
+			{Hash: 77, Value: 0},
 		},
 	}
 
@@ -74,10 +76,10 @@ func TestHTTPClientSendBuildsSetRequest(t *testing.T) {
 }
 
 func TestBuildSetQueryFormatter(t *testing.T) {
-	custom := func(update SensorUpdate) string {
-		return "name_" + strconv.FormatInt(update.ID, 10)
+	custom := func(hash int64, _ *config.SensorRegistry) string {
+		return "name_" + strconv.FormatInt(hash, 10)
 	}
-	query, err := buildSetQuery("", []SensorUpdate{{ID: 1, Value: 2.5}}, custom)
+	query, err := buildSetQuery("", []SensorUpdate{{Hash: 1, Value: 2.5}}, custom, nil)
 	if err != nil {
 		t.Fatalf("buildSetQuery returned error: %v", err)
 	}
@@ -122,7 +124,7 @@ func TestHTTPClientSetAndGetFlow(t *testing.T) {
 	}
 	payload := StepPayload{
 		Updates: []SensorUpdate{
-			{ID: 42, Value: 12.5},
+			{Hash: 42, Value: 12.5},
 		},
 	}
 	if err := client.Send(context.Background(), payload); err != nil {
@@ -151,7 +153,7 @@ func TestHTTPClientSendHandlesHTTPError(t *testing.T) {
 		},
 	}
 	err := client.Send(context.Background(), StepPayload{
-		Updates: []SensorUpdate{{ID: 1, Value: 1}},
+		Updates: []SensorUpdate{{Hash: 1, Value: 1}},
 	})
 	if err == nil || !strings.Contains(err.Error(), "status=500") || !strings.Contains(err.Error(), "failed to set") {
 		t.Fatalf("unexpected error: %v", err)
@@ -174,7 +176,7 @@ func TestHTTPClientSendContextTimeout(t *testing.T) {
 	defer cancel()
 
 	err := client.Send(ctx, StepPayload{
-		Updates: []SensorUpdate{{ID: 10, Value: 2}},
+		Updates: []SensorUpdate{{Hash: 10, Value: 2}},
 	})
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("expected deadline exceeded error, got %v", err)
@@ -203,7 +205,7 @@ func TestHTTPClientRetry(t *testing.T) {
 		},
 	}
 	err := client.Send(context.Background(), StepPayload{
-		Updates: []SensorUpdate{{ID: 1, Value: 1}},
+		Updates: []SensorUpdate{{Hash: 1, Value: 1}},
 	})
 	if err != nil {
 		t.Fatalf("expected retry success, got %v", err)
@@ -240,10 +242,10 @@ func TestHTTPClientWorkerQueue(t *testing.T) {
 
 	errCh := make(chan error, 2)
 	go func() {
-		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{ID: 1, Value: 1}}})
+		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{Hash: 1, Value: 1}}})
 	}()
 	go func() {
-		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{ID: 2, Value: 2}}})
+		errCh <- client.Send(ctx, StepPayload{Updates: []SensorUpdate{{Hash: 2, Value: 2}}})
 	}()
 
 	// ждём первый запрос и отпускаем транспорт, чтобы воркер взял второй

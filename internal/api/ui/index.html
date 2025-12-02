@@ -818,16 +818,15 @@
       pendingChartUpdate: false,
     };
   const sensorIndex = {
-      byId: new Map(),    // id -> {id,name,textname}
-      byName: new Map(),  // lower(name) -> id
+      byName: new Map(),    // name -> {name,textname,iotype,configId}
       hydrated: false,
     };
 
-  function getSensorMeta(id) {
-    return sensorIndex.byId.get(id) || tableState.meta.get(id) || {};
+  function getSensorMeta(name) {
+    return sensorIndex.byName.get(name) || tableState.meta.get(name) || {};
   }
-  function getSensorType(id) {
-    const t = (getSensorMeta(id)?.iotype || '').toString().toUpperCase();
+  function getSensorType(name) {
+    const t = (getSensorMeta(name)?.iotype || '').toString().toUpperCase();
     return t;
   }
   function isDiscreteIO(io) {
@@ -839,48 +838,50 @@
     if (!t) return true;
     return t === 'AI' || t === 'AO' || t === '';
   }
-  function isDiscreteSensor(id) {
-    const t = getSensorType(id);
+  function isDiscreteSensor(name) {
+    const t = getSensorType(name);
     return isDiscreteIO(t);
   }
-  function isAnalogSensor(id) {
-    const t = getSensorType(id);
+  function isAnalogSensor(name) {
+    const t = getSensorType(name);
     return isAnalogIO(t);
   }
 
-  function allSensorIds() {
-    return Array.from(sensorIndex.byId.keys()).sort((a, b) => a - b);
+  function allSensorNames() {
+    return Array.from(sensorIndex.byName.keys()).sort();
   }
 
-  function dedupeIds(list) {
+  function dedupeNames(list) {
     const set = new Set();
     list.forEach((n) => {
-      const id = Number(n);
-      if (Number.isFinite(id)) set.add(id);
+      if (typeof n === 'string' && n) set.add(n);
     });
-    return Array.from(set).sort((a, b) => a - b);
+    return Array.from(set).sort();
   }
 
-  function isWorkingSensor(id) {
+  function isWorkingSensor(name) {
     if (!state.workingReady) return true;
     if (!state.workingSensors.length) return false;
     if (state.workingSet && state.workingSet.size) {
-      return state.workingSet.has(id);
+      return state.workingSet.has(name);
     }
-    return state.workingSensors.includes(id);
+    return state.workingSensors.includes(name);
   }
 
-  function setWorkingLocal(ids, isDefault = false) {
-    const uniq = dedupeIds(ids || []);
+  function setWorkingLocal(names, isDefault = false) {
+    const uniq = dedupeNames(names || []);
     state.workingSensors = uniq;
     state.workingSet = new Set(uniq);
     state.workingDefault = !!isDefault;
     state.workingReady = true;
     updateWorkingMeta();
-    if (els.sensorsDialog && !els.sensorsDialog.open) {
+    // Синхронизируем workingPicker.selected с рабочим списком, если диалог не открыт
+    if (!els.sensorsDialog || !els.sensorsDialog.open) {
       workingPicker.selected = new Set(uniq);
     }
     updateControls();
+    // Перерисовываем таблицу датчиков, чтобы она показывала только рабочий список
+    scheduleRenderTable(true);
   }
 
   function updateWorkingMeta() {
@@ -890,7 +891,7 @@
       els.working.meta.style.color = '#94a3b8';
       return;
     }
-    const total = sensorIndex.byId.size || state.workingSensors.length;
+    const total = sensorIndex.byName.size || state.workingSensors.length;
     const count = state.workingSensors.length;
     if (!state.workingSensors.length) {
       els.working.meta.textContent = 'Рабочий список датчиков: не выбран';
@@ -911,15 +912,15 @@
     state.workingLoading = true;
     try {
       const data = await requestJSON('GET', '/api/v2/job/sensors');
-      const ids = (data?.sensors || []).map(Number).filter(Number.isFinite);
+      const names = (data?.sensors || []).filter(s => typeof s === 'string');
       const isDefault = !!data?.default;
-      setWorkingLocal(ids.length ? ids : allSensorIds(), isDefault || !ids.length);
-      pushDiagAction(`[working] loaded count=${ids.length} default=${isDefault ? 'yes' : 'no'}`);
+      setWorkingLocal(names.length ? names : allSensorNames(), isDefault || !names.length);
+      pushDiagAction(`[working] loaded count=${names.length} default=${isDefault ? 'yes' : 'no'}`);
     } catch (err) {
       pushDiagAction(`[working] load failed: ${err.message}`);
       // Фолбэк: используем полный список, если он уже загружен.
-      if (sensorIndex.byId.size) {
-        setWorkingLocal(allSensorIds(), true);
+      if (sensorIndex.byName.size) {
+        setWorkingLocal(allSensorNames(), true);
       } else {
         state.workingReady = true;
         state.workingSensors = [];
@@ -931,14 +932,14 @@
     }
   }
 
-  async function applyWorkingSensors(ids, opts = {}) {
-    const uniq = dedupeIds(ids);
+  async function applyWorkingSensors(names, opts = {}) {
+    const uniq = dedupeNames(names);
     if (!uniq.length) {
       throw new Error('Нет валидных датчиков');
     }
-    pushDiagAction(`[working] apply ids=${uniq.length}`);
+    pushDiagAction(`[working] apply names=${uniq.length}`);
     const data = await requestJSON('POST', '/api/v2/job/sensors', { sensors: uniq });
-    const accepted = (data?.sensors || uniq).map(Number).filter(Number.isFinite);
+    const accepted = (data?.sensors || uniq).filter(s => typeof s === 'string');
     const isDefault = !!data?.default;
     setWorkingLocal(accepted, isDefault);
     const rejected = (data?.rejected || []).length;
@@ -956,22 +957,22 @@
     const lines = (text || '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
     const valid = [];
     const rejected = [];
-    const byName = sensorIndex.byName;
     lines.forEach((line) => {
       if (!line) return;
-      const num = Number(line);
-      if (Number.isFinite(num) && sensorIndex.byId.has(num)) {
-        valid.push(num);
+      // Check if name exists in sensorIndex
+      if (sensorIndex.byName.has(line)) {
+        valid.push(line);
         return;
       }
-      const id = byName.get(line.toLowerCase());
-      if (id !== undefined) {
-        valid.push(id);
+      // Try case-insensitive match
+      const found = Array.from(sensorIndex.byName.keys()).find(k => k.toLowerCase() === line.toLowerCase());
+      if (found) {
+        valid.push(found);
         return;
       }
       rejected.push(line);
     });
-    return { valid: dedupeIds(valid), rejected };
+    return { valid: dedupeNames(valid), rejected };
   }
 
   let chartValuePrecision = 3;
@@ -997,16 +998,13 @@
   }
 
   function normalizeUpdates(msg) {
-    if (Array.isArray(msg?.u)) {
-      return msg.u
-        .map((row) => {
-          const id = Number(row?.[0]);
-          if (!Number.isFinite(id)) return null;
-          const value = row?.[1];
-          const has = (row?.length || 0) > 2 ? row[2] !== 0 : true;
-          return { id, value, has_value: has };
-        })
-        .filter(Boolean);
+    // New compact format: msg.u is an object {name: [value, hasValue]}
+    if (msg?.u && typeof msg.u === 'object' && !Array.isArray(msg.u)) {
+      return Object.entries(msg.u).map(([name, arr]) => {
+        const value = arr?.[0];
+        const has = (arr?.length || 0) > 1 ? arr[1] !== 0 : true;
+        return { name, value, has_value: has };
+      });
     }
     if (Array.isArray(msg?.updates)) return msg.updates;
     if (Array.isArray(msg?.Updates)) return msg.Updates;
@@ -1196,14 +1194,15 @@
       if (!Array.isArray(list)) return;
       pushDiagAction(`[ws] snapshot rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
-        const key = Number(item.id);
-        if (!Number.isFinite(key)) return;
-        registerSensorMeta(key, item.name, item.textname, item.iotype);
+        const key = item.name;
+        if (!key || typeof key !== 'string') return;
+        const configId = item.config_id !== undefined ? Number(item.config_id) : null;
+        registerSensorMeta(key, item.textname, item.iotype, configId);
         const hasValue = itemHasValue(item);
         tableState.rows.set(key, {
-          id: key,
-          name: item.name || `${key}`,
+          name: key,
           textname: item.textname || '',
+          configId,
           value: item.value,
           hasValue,
           stepID: tableState.lastStep || 0,
@@ -1218,18 +1217,16 @@
     const now = Date.now();
       pushDiagAction(`[ws] updates rows=${list.length} ts=${tsStr || '-'}`);
       list.forEach(item => {
-        const key = Number(item.id);
-        if (!Number.isFinite(key)) return;
+        const key = item.name;
+        if (!key || typeof key !== 'string') return;
         const prev = tableState.rows.get(key) || {};
         const hadValue = prev.hasValue;
         const changed = !hadValue || prev.value !== item.value;
         const meta = tableState.meta.get(key) || {};
-        const name = item.name || meta.name || prev.name || `${key}`;
-        registerSensorMeta(key, name, item.textname || meta.textname || prev.textname, item.iotype || meta.iotype || prev.iotype);
+        registerSensorMeta(key, item.textname || meta.textname || prev.textname, item.iotype || meta.iotype || prev.iotype);
         const hasValue = itemHasValue(item, hadValue);
         tableState.rows.set(key, {
-          id: key,
-          name,
+          name: key,
           textname: item.textname || meta.textname || prev.textname || '',
           value: item.value,
           hasValue,
@@ -1269,15 +1266,14 @@
     const filter = (tableState.filter || '').trim();
     const useMeta = !!filter;
     const workingOn = state.workingReady && state.workingSensors.length > 0;
-    const inWorking = (id) => !workingOn || isWorkingSensor(id);
+    const inWorking = (name) => !workingOn || isWorkingSensor(name);
     const baseRows = useMeta
-      ? Array.from(tableState.meta.entries()).map(([id, meta]) => {
-            if (!inWorking(id)) return null;
-            const row = tableState.rows.get(id) || {};
+      ? Array.from(tableState.meta.entries()).map(([name, meta]) => {
+            if (!inWorking(name)) return null;
+            const row = tableState.rows.get(name) || {};
             const hasValue = !!row.hasValue;
             return {
-              id,
-              name: meta.name || `${id}`,
+              name,
               textname: meta.textname || '',
               value: hasValue ? row.value : '—',
               hasValue,
@@ -1286,7 +1282,7 @@
               changedAt: row.changedAt,
             };
           }).filter(Boolean)
-        : Array.from(tableState.rows.values()).filter(r => inWorking(r.id));
+        : Array.from(tableState.rows.values()).filter(r => inWorking(r.name));
     let filtered = filter
       ? baseRows.filter(r => {
           const name = (r.name || '').toLowerCase();
@@ -1296,10 +1292,9 @@
         : baseRows;
       const applySelection = applySelected && tableState.selected.size > 0 && !filter;
       if (applySelection) {
-        filtered = filtered.filter(r => tableState.selected.has(r.id));
+        filtered = filtered.filter(r => tableState.selected.has(r.name));
       }
       filtered.sort((a, b) => {
-        if (a.name === b.name) return a.id - b.id;
         return a.name.localeCompare(b.name);
       });
       return filtered;
@@ -1312,18 +1307,21 @@
       const html = filtered.map(r => {
         const isChanged = r.changedAt && now - r.changedAt < 4000;
         const value = r.hasValue ? formatTableValue(r.value) : '—';
-        const metaText = tableState.meta.get(r.id)?.textname || sensorIndex.byId.get(r.id)?.textname || '';
-        const metaType = tableState.meta.get(r.id)?.iotype || sensorIndex.byId.get(r.id)?.iotype || '';
+        const metaText = tableState.meta.get(r.name)?.textname || sensorIndex.byName.get(r.name)?.textname || '';
+        const metaType = tableState.meta.get(r.name)?.iotype || sensorIndex.byName.get(r.name)?.iotype || '';
+        const metaConfigId = tableState.meta.get(r.name)?.configId || sensorIndex.byName.get(r.name)?.configId;
         const text = r.textname || metaText || '';
-        const checked = tableState.selected.has(r.id) ? 'checked' : '';
+        const checked = tableState.selected.has(r.name) ? 'checked' : '';
         const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`;
+        // Показываем configId в скобках если он есть
+        const nameWithId = metaConfigId ? `${r.name || ''} <span style="color:#94a3b8;">(${metaConfigId})</span>` : (r.name || '');
         return `<tr class="${rowClass.trim()}">
-          <td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.id}" ${checked}></td>
-          <td>${r.name || ''}</td>
+          <td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.name}" ${checked}></td>
+          <td>${nameWithId}</td>
           <td class="value">${value}</td>
           <td>${text}</td>
           <td style="text-align:center;">${metaType || ''}</td>
-          <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.id}" title="Добавить на график">📊</button></td>
+          <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.name}" title="Добавить на график">📊</button></td>
         </tr>`;
       }).join('');
       els.table.body.innerHTML = html || `<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
@@ -1341,7 +1339,7 @@
       }
       if (els.table.selectAll) {
         const base = getFilteredTableRows(false);
-        const allSelected = base.length > 0 && base.every(r => tableState.selected.has(r.id));
+        const allSelected = base.length > 0 && base.every(r => tableState.selected.has(r.name));
         els.table.selectAll.checked = allSelected && tableState.selected.size > 0;
         els.table.selectAll.indeterminate = tableState.selected.size > 0 && !allSelected;
       }
@@ -1372,21 +1370,17 @@
     if (!els.sensorsDialogBody) return;
     const filter = (workingPicker.filter || '').trim().toLowerCase();
     const rows = [];
-    sensorIndex.byId.forEach((meta, id) => {
-      const name = meta.name || `${id}`;
+    sensorIndex.byName.forEach((meta, name) => {
       const text = meta.textname || '';
       const type = (meta.iotype || '').toUpperCase();
       if (filter && !name.toLowerCase().includes(filter) && !text.toLowerCase().includes(filter)) return;
-      rows.push({ id, name, text, type });
+      rows.push({ name, text, type });
     });
-    rows.sort((a, b) => {
-      if (a.name === b.name) return a.id - b.id;
-      return a.name.localeCompare(b.name);
-    });
+    rows.sort((a, b) => a.name.localeCompare(b.name));
     const html = rows.map(r => {
-      const checked = workingPicker.selected.has(r.id) ? 'checked' : '';
+      const checked = workingPicker.selected.has(r.name) ? 'checked' : '';
       return `<tr>
-        <td style="text-align:center;"><input type="checkbox" class="dlg-select" data-sensor="${r.id}" ${checked}></td>
+        <td style="text-align:center;"><input type="checkbox" class="dlg-select" data-sensor="${r.name}" ${checked}></td>
         <td>${r.name}</td>
         <td>${r.text || ''}</td>
         <td style="text-align:center;">${r.type || ''}</td>
@@ -1394,13 +1388,13 @@
     }).join('');
     els.sensorsDialogBody.innerHTML = html || `<tr><td colspan="4" style="text-align:center; color:#94a3b8; padding:10px;">Нет датчиков</td></tr>`;
     if (els.sensorsDialogMeta) {
-      const total = sensorIndex.byId.size;
+      const total = sensorIndex.byName.size;
       const filtered = rows.length;
       const sel = workingPicker.selected.size;
       els.sensorsDialogMeta.textContent = `Выбрано: ${sel} · Отфильтровано: ${filtered}/${total}`;
     }
     if (els.sensorsSelectAll) {
-      const allSelected = rows.length > 0 && rows.every(r => workingPicker.selected.has(r.id));
+      const allSelected = rows.length > 0 && rows.every(r => workingPicker.selected.has(r.name));
       els.sensorsSelectAll.checked = allSelected && workingPicker.selected.size > 0;
       els.sensorsSelectAll.indeterminate = workingPicker.selected.size > 0 && !allSelected;
     }
@@ -1465,15 +1459,15 @@
       return;
     }
     // existing
-    const ids = Array.from(document.querySelectorAll('input.dlg-select:checked'))
-      .map((n) => Number(n.getAttribute('data-sensor')))
-      .filter(Number.isFinite);
-    if (!ids.length) {
+    const names = Array.from(document.querySelectorAll('input.dlg-select:checked'))
+      .map((n) => n.getAttribute('data-sensor'))
+      .filter((s) => typeof s === 'string' && s.length > 0);
+    if (!names.length) {
       setSensorsDialogError('Нужно выбрать хотя бы один датчик');
       return;
     }
     try {
-      await applyWorkingSensors(ids, { toast: true });
+      await applyWorkingSensors(names, { toast: true });
       if (els.sensorsDialog) els.sensorsDialog.close();
     } catch (err) {
       setSensorsDialogError(err.message);
@@ -1517,31 +1511,30 @@
       return '#22d3ee';
     }
 
-    function chartLabelByID(id) {
-      const meta = tableState.meta.get(id) || sensorIndex.byId.get(id) || {};
-      if (meta.name) return `${meta.name} (${id})`;
-      return `${id}`;
+    function chartLabelByName(name) {
+      // Return just name, without configId suffix
+      return name;
     }
 
-    function registerSensorMeta(id, name, textname, iotype) {
-      if (!Number.isFinite(id)) return;
-      const prev = tableState.meta.get(id) || {};
-      const resolvedName = name || prev.name || `${id}`;
+    function registerSensorMeta(name, textname, iotype, configId) {
+      if (!name || typeof name !== 'string') return;
+      const prev = tableState.meta.get(name) || {};
       const resolvedText = textname !== undefined ? textname : prev.textname;
       const resolvedIO = iotype !== undefined ? iotype : prev.iotype;
-      tableState.meta.set(id, { name: resolvedName, textname: resolvedText || '', iotype: resolvedIO || '' });
-      sensorIndex.byId.set(id, { id, name: resolvedName, textname: resolvedText || '', iotype: resolvedIO || '' });
-      sensorIndex.byName.set(String(resolvedName).toLowerCase(), id);
+      const resolvedConfigId = configId !== undefined && configId !== null ? configId : prev.configId;
+      tableState.meta.set(name, { name, textname: resolvedText || '', iotype: resolvedIO || '', configId: resolvedConfigId });
+      sensorIndex.byName.set(name, { name, textname: resolvedText || '', iotype: resolvedIO || '', configId: resolvedConfigId });
     }
 
-    function knownSensorIdByToken(token) {
+    function knownSensorByToken(token) {
       if (!token) return null;
-      const num = Number(token);
-      if (Number.isFinite(num) && sensorIndex.byId.has(num)) {
-        return num;
+      // Check exact match
+      if (sensorIndex.byName.has(token)) {
+        return token;
       }
-      const byName = sensorIndex.byName.get(token.toLowerCase());
-      return Number.isFinite(byName) ? byName : null;
+      // Try case-insensitive match
+      const found = Array.from(sensorIndex.byName.keys()).find(k => k.toLowerCase() === token.toLowerCase());
+      return found || null;
     }
 
     function parseChartSensors(input) {
@@ -1550,8 +1543,8 @@
       if (!tokens.length) return [];
       const out = [];
       tokens.forEach(tok => {
-        const id = knownSensorIdByToken(tok);
-        if (Number.isFinite(id)) out.push(id);
+        const name = knownSensorByToken(tok);
+        if (name) out.push(name);
       });
       return Array.from(new Set(out));
     }
@@ -1559,13 +1552,12 @@
     function normalizeSensorList(list) {
       if (!Array.isArray(list)) return [];
       const res = [];
-      list.forEach((id) => {
-        const num = Number(id);
-        if (!Number.isFinite(num)) return;
-        if (!sensorIndex.byId.has(num)) {
-        registerSensorMeta(num, `${num}`, '', '');
+      list.forEach((name) => {
+        if (!name || typeof name !== 'string') return;
+        if (!sensorIndex.byName.has(name)) {
+          registerSensorMeta(name, '', '');
         }
-        if (sensorIndex.byId.has(num)) res.push(num);
+        if (sensorIndex.byName.has(name)) res.push(name);
       });
       return Array.from(new Set(res));
     }
@@ -1574,18 +1566,18 @@
       const prev = chartState.datasets;
       const next = new Map();
       const used = new Set();
-      chartState.selected.forEach((id, idx) => {
-        const existing = prev.get(id);
+      chartState.selected.forEach((name, idx) => {
+        const existing = prev.get(name);
         const preserved = existing?.color;
-        const color = preserved || pickChartColor(id, used, idx);
+        const color = preserved || pickChartColor(name, used, idx);
         if (color) used.add(color.toLowerCase());
         const data = existing?.data ? existing.data.slice() : [];
         const lastValue = existing?.lastValue ?? null;
         const lastTs = existing?.lastTs ?? null;
-        const iotype = existing?.iotype || getSensorType(id);
-        next.set(id, {
-          id,
-          label: chartLabelByID(id),
+        const iotype = existing?.iotype || getSensorType(name);
+        next.set(name, {
+          name,
+          label: chartLabelByName(name),
           color,
           data: data ? data.slice() : [],
           lastValue,
@@ -1603,7 +1595,7 @@
 
     function updateChartMeta(msg) {
       if (!els.charts.meta) return;
-      const sensors = chartState.selected.length ? chartState.selected.map(chartLabelByID).join(', ') : '—';
+      const sensors = chartState.selected.length ? chartState.selected.map(chartLabelByName).join(', ') : '—';
       const points = chartState.chart
         ? (chartState.chart.data.labels?.length || 0)
         : Array.from(chartState.datasets.values()).reduce((acc, ds) => Math.max(acc, ds.data?.length || 0), 0);
@@ -1641,15 +1633,15 @@
     function renderLegendTable() {
       if (!els.charts.legendBody) return;
       try {
-        const rows = chartState.selected.map((id) => {
-          const ds = chartState.datasets.get(id) || {};
+        const rows = chartState.selected.map((name) => {
+          const ds = chartState.datasets.get(name) || {};
           const val = formatChartValue(ds.lastValue);
           const color = ds.color || '#22d3ee';
           const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
-          const text = (sensorIndex.byId.get(id)?.textname) || '—';
-          const muted = chartState.focused !== null && chartState.focused !== id;
+          const text = (sensorIndex.byName.get(name)?.textname) || '—';
+          const muted = chartState.focused !== null && chartState.focused !== name;
           const rowClass = muted ? 'legend-muted' : 'legend-active';
-          return `<tr data-sensor="${id}" class="${rowClass}"><td><button class="chart-color-btn" data-sensor="${id}" style="background:${color};"></button></td><td>${chartLabelByID(id)}</td><td>${val}</td><td>${ts}</td><td>${text}</td><td style="text-align:right;"><button class="ghost chart-remove-btn" data-sensor="${id}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
+          return `<tr data-sensor="${name}" class="${rowClass}"><td><button class="chart-color-btn" data-sensor="${name}" style="background:${color};"></button></td><td>${chartLabelByName(name)}</td><td>${val}</td><td>${ts}</td><td>${text}</td><td style="text-align:right;"><button class="ghost chart-remove-btn" data-sensor="${name}" type="button" style="padding:6px 10px;">✕</button></td></tr>`;
         }).join('');
         els.charts.legendBody.innerHTML = rows || '<tr><td colspan="6" style="color:#94a3b8;">Нет выбранных датчиков</td></tr>';
       } catch (err) {
@@ -1657,15 +1649,15 @@
       }
     }
 
-    function openColorDialog(id) {
+    function openColorDialog(name) {
       const dlg = els.charts.colorDialog;
       const input = els.charts.colorInput;
       if (!dlg || !input) return;
-      const ds = chartState.datasets.get(id);
+      const ds = chartState.datasets.get(name);
       if (!ds) return;
       const color = normalizeHexColor(ds.color || '#22d3ee');
       input.value = color;
-      dlg.dataset.sensor = String(id);
+      dlg.dataset.sensor = name;
       if (!dlg.open) {
         dlg.showModal();
       } else {
@@ -1676,14 +1668,13 @@
   function refreshChartSuggestions() {
     const opts = [];
     const usedValues = new Set();
-    sensorIndex.byId.forEach((meta, id) => {
-        if (!isWorkingSensor(id)) return;
-      if (chartState.selected.includes(id)) return; // уже на графике
-      const label = meta?.name ? `${meta.name}` : `${id}`;
-      const val = meta?.name || `${id}`;
-      if (!val || usedValues.has(val)) return;
-      usedValues.add(val);
-        opts.push({ value: val, label: `${label} (${id})` });
+    sensorIndex.byName.forEach((meta, name) => {
+        if (!isWorkingSensor(name)) return;
+      if (chartState.selected.includes(name)) return; // уже на графике
+      const label = name;
+      if (!name || usedValues.has(name)) return;
+      usedValues.add(name);
+        opts.push({ value: name, label: chartLabelByName(name) });
       });
       renderChartSuggestions(els.charts.sensors?.value || '');
       updateChartInputState();
@@ -1701,13 +1692,12 @@
       chartState.suggest.locked = false;
     const items = [];
     let availableCount = 0;
-    sensorIndex.byId.forEach((meta, id) => {
-        if (!isWorkingSensor(id)) return;
-        if (chartState.selected.includes(id)) return;
-        const name = meta?.name || `${id}`;
+    sensorIndex.byName.forEach((meta, name) => {
+        if (!isWorkingSensor(name)) return;
+        if (chartState.selected.includes(name)) return;
         const text = name.toLowerCase();
-        if (q && !text.includes(q) && !String(id).includes(q)) return;
-        items.push({ id, name });
+        if (q && !text.includes(q)) return;
+        items.push({ name });
         availableCount++;
       });
       if (!q) {
@@ -1736,7 +1726,7 @@
       };
       els.charts.suggestBox.innerHTML = limited.map((item, idx) => {
         const activeClass = idx === chartState.suggest.active ? 'active' : '';
-        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.id}">${highlight(item.name)} <span style="color:#94a3b8;">(${item.id})</span></div>`;
+        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.name}">${highlight(chartLabelByName(item.name))}</div>`;
       }).join('');
       els.charts.suggestBox.style.display = 'block';
       updateChartInputState(availableCount);
@@ -1762,7 +1752,7 @@
 
     function buildChartDatasets() {
       return Array.from(chartState.datasets.values())
-        .filter(ds => isAnalogIO(ds.iotype) && isAnalogSensor(ds.id))
+        .filter(ds => isAnalogIO(ds.iotype) && isAnalogSensor(ds.name))
         .map(ds => ({
         label: ds.label,
         data: ds.data,
@@ -1773,30 +1763,30 @@
         pointRadius: 0,
         borderWidth: 1,
         fill: !!(els.charts.fill && els.charts.fill.checked),
-        hidden: chartState.focused !== null && chartState.focused !== ds.id,
+        hidden: chartState.focused !== null && chartState.focused !== ds.name,
       }));
     }
 
     function getStepOffsets() {
       const offsets = new Map();
       const discrete = chartState.selected.filter(isDiscreteSensor);
-      discrete.forEach((id, idx) => offsets.set(id, idx));
+      discrete.forEach((name, idx) => offsets.set(name, idx));
       return offsets;
     }
 
     function buildStepDatasets() {
       const offsets = getStepOffsets();
       const used = new Set(Array.from(chartState.datasets.values()).map(ds => (ds.color || '').toLowerCase()).filter(Boolean));
-      const discreteIds = chartState.selected.filter(isDiscreteSensor);
-      return discreteIds.map((id, idx) => {
-        const ds = chartState.datasets.get(id) || {};
-        const color = ds.color || pickChartColor(id, used, idx) || '#22d3ee';
+      const discreteNames = chartState.selected.filter(isDiscreteSensor);
+      return discreteNames.map((name, idx) => {
+        const ds = chartState.datasets.get(name) || {};
+        const color = ds.color || pickChartColor(name, used, idx) || '#22d3ee';
         if (color) used.add(color.toLowerCase());
         return {
-          label: ds.label || chartLabelByID(id),
+          label: ds.label || chartLabelByName(name),
           data: (ds.data || []).map(p => {
             const step = toStepValue(p.y);
-            const offset = (offsets.get(id) || 0) * 2;
+            const offset = (offsets.get(name) || 0) * 2;
             return { x: p.x, y: step === null ? null : offset + step };
           }),
           borderColor: color,
@@ -1807,7 +1797,7 @@
           pointRadius: 0,
           borderWidth: 1,
           fill: false,
-          hidden: chartState.focused !== null && chartState.focused !== id,
+          hidden: chartState.focused !== null && chartState.focused !== name,
         };
       });
     }
@@ -1824,7 +1814,7 @@
 
     function updateChartInputState(availableCount) {
       if (!els.charts.sensors) return;
-      const totalAvailable = availableCount !== undefined ? availableCount : Math.max(sensorIndex.byId.size - chartState.selected.length, 0);
+      const totalAvailable = availableCount !== undefined ? availableCount : Math.max(sensorIndex.byName.size - chartState.selected.length, 0);
       // Не блокируем поле, чтобы можно было вводить даже при пустых подсказках.
       els.charts.sensors.disabled = false;
       if (els.charts.sensors.parentElement) {
@@ -2179,9 +2169,9 @@
       if (!tsStr) return;
       const canAutoAdd = rangeSensorCountKnown && rangeSensorCount > 0 && rangeSensorCount <= chartAutoAddLimit;
       if (!chartState.selected.length && canAutoAdd && updates?.length) {
-        const ids = Array.from(new Set((updates || []).map(u => Number(u.id)).filter(Number.isFinite)));
-        if (ids.length) {
-          applyChartSensors(ids);
+        const names = Array.from(new Set((updates || []).map(u => u.name).filter(n => typeof n === 'string' && n)));
+        if (names.length) {
+          applyChartSensors(names);
         }
       }
       if (!chartState.selected.length) return;
@@ -2198,19 +2188,19 @@
       }
       const updateMap = new Map();
       (updates || []).forEach(item => {
-        const id = Number(item.id);
-        if (Number.isFinite(id)) updateMap.set(id, item.value);
+        const name = item.name;
+        if (typeof name === 'string' && name) updateMap.set(name, item.value);
       });
       const usedColors = new Set();
       chartState.datasets.forEach(ds => {
         if (ds.color) usedColors.add(String(ds.color).toLowerCase());
       });
-      chartState.selected.forEach((id, idx) => {
-        if (!chartState.datasets.has(id)) {
-          const color = pickChartColor(id, usedColors, idx);
-          chartState.datasets.set(id, {
-            id,
-            label: chartLabelByID(id),
+      chartState.selected.forEach((name, idx) => {
+        if (!chartState.datasets.has(name)) {
+          const color = pickChartColor(name, usedColors, idx);
+          chartState.datasets.set(name, {
+            name,
+            label: chartLabelByName(name),
             color,
             data: [],
             lastValue: null,
@@ -2218,8 +2208,8 @@
           });
           usedColors.add(String(color).toLowerCase());
         }
-        const ds = chartState.datasets.get(id);
-        const val = updateMap.has(id) ? updateMap.get(id) : (ds.lastValue ?? 0);
+        const ds = chartState.datasets.get(name);
+        const val = updateMap.has(name) ? updateMap.get(name) : (ds.lastValue ?? 0);
         const numVal = Number.isFinite(Number(val)) ? Number(val) : 0;
         const y = numVal;
         ds.lastValue = y;
@@ -2507,20 +2497,20 @@
   function mergeSensorsFromAPI(list) {
     if (!Array.isArray(list)) return;
     list.forEach((item) => {
-      const id = Number(item.id);
-      if (!Number.isFinite(id)) return;
-      registerSensorMeta(id, item.name, item.textname, item.iotype);
+      const name = item.name;
+      if (!name || typeof name !== 'string') return;
+      const configId = item.config_id !== undefined ? Number(item.config_id) : null;
+      registerSensorMeta(name, item.textname, item.iotype, configId);
     });
     seedTableFromMeta();
     refreshChartSuggestions();
   }
 
   function seedTableFromMeta() {
-    sensorIndex.byId.forEach((meta, id) => {
-      if (!tableState.rows.has(id)) {
-        tableState.rows.set(id, {
-          id,
-          name: meta.name || `${id}`,
+    sensorIndex.byName.forEach((meta, name) => {
+      if (!tableState.rows.has(name)) {
+        tableState.rows.set(name, {
+          name,
           textname: meta.textname || '',
           value: undefined,
           hasValue: false,
@@ -2967,7 +2957,7 @@
       state.model.Params = pendingRange;
     }
     // Если после обновления таблица пуста, а метаданные уже есть, подсетим строки.
-    if (!tableState.rows.size && sensorIndex.byId.size) {
+    if (!tableState.rows.size && sensorIndex.byName.size) {
       seedTableFromMeta();
     } else if (!sensorIndex.hydrated) {
       preloadSensors().catch(() => {});
@@ -3068,7 +3058,7 @@
         els.table.selectAll.addEventListener('change', () => {
           const rows = getFilteredTableRows(false);
           if (els.table.selectAll.checked) {
-            rows.forEach(r => tableState.selected.add(r.id));
+            rows.forEach(r => tableState.selected.add(r.name));
           } else {
             tableState.selected.clear();
           }
@@ -3106,15 +3096,14 @@
       if (els.sensorsSelectAll) {
         els.sensorsSelectAll.addEventListener('change', () => {
           const filter = (workingPicker.filter || '').trim().toLowerCase();
-          const ids = [];
-          sensorIndex.byId.forEach((meta, id) => {
-            const name = meta.name || `${id}`;
+          const names = [];
+          sensorIndex.byName.forEach((meta, name) => {
             const text = meta.textname || '';
             if (filter && !name.toLowerCase().includes(filter) && !text.toLowerCase().includes(filter)) return;
-            ids.push(id);
+            names.push(name);
           });
-          if (els.sensorsSelectAll.checked) ids.forEach(id => workingPicker.selected.add(id));
-          else ids.forEach(id => workingPicker.selected.delete(id));
+          if (els.sensorsSelectAll.checked) names.forEach(n => workingPicker.selected.add(n));
+          else names.forEach(n => workingPicker.selected.delete(n));
           renderSensorsDialogTable();
         });
       }
@@ -3123,10 +3112,10 @@
           const target = e.target;
           if (!(target instanceof HTMLInputElement)) return;
           if (!target.classList.contains('dlg-select')) return;
-          const id = Number(target.dataset.sensor);
-          if (!Number.isFinite(id)) return;
-          if (target.checked) workingPicker.selected.add(id);
-          else workingPicker.selected.delete(id);
+          const name = target.dataset.sensor;
+          if (!name) return;
+          if (target.checked) workingPicker.selected.add(name);
+          else workingPicker.selected.delete(name);
           renderSensorsDialogTable();
         });
       }
@@ -3153,7 +3142,7 @@
         els.sensorsResetBtn.addEventListener('click', async (e) => {
           e.preventDefault();
           try {
-            await applyWorkingSensors(allSensorIds(), { toast: true });
+            await applyWorkingSensors(allSensorNames(), { toast: true });
             if (els.sensorsDialog) els.sensorsDialog.close();
           } catch (err) {
             setSensorsDialogError(err.message);
@@ -3179,25 +3168,25 @@
         els.table.body.addEventListener('change', (e) => {
           const target = e.target;
           if (!target || !target.matches('input.table-select')) return;
-          const id = Number(target.dataset.sensor);
-          if (!Number.isFinite(id)) return;
+          const name = target.dataset.sensor;
+          if (!name) return;
           if (target.checked) {
-            tableState.selected.add(id);
+            tableState.selected.add(name);
           } else {
-            tableState.selected.delete(id);
+            tableState.selected.delete(name);
           }
           renderTable(false);
         });
         els.table.body.addEventListener('click', (e) => {
           const btn = e.target.closest('button[data-chart-add]');
           if (!btn) return;
-          const id = Number(btn.dataset.chartAdd);
-          if (!Number.isFinite(id)) return;
+          const name = btn.dataset.chartAdd;
+          if (!name) return;
           (async () => {
             if (!sensorIndex.hydrated) {
               try { await preloadSensors(); } catch (_) { /* ignore */ }
             }
-            const next = Array.from(new Set([...chartState.selected, id]));
+            const next = Array.from(new Set([...chartState.selected, name]));
             applyChartSensors(next);
           })();
         });
@@ -3251,11 +3240,11 @@
       }
       if (els.charts.colorDialog) {
         els.charts.colorDialog.addEventListener('close', () => {
-          const id = Number(els.charts.colorDialog.dataset.sensor);
-          if (!Number.isFinite(id)) return;
+          const name = els.charts.colorDialog.dataset.sensor;
+          if (!name) return;
           if (els.charts.colorDialog.returnValue !== 'ok') return;
           const color = normalizeHexColor(els.charts.colorInput?.value || '');
-          const ds = chartState.datasets.get(id);
+          const ds = chartState.datasets.get(name);
           if (!ds) return;
           ds.color = color;
           rebuildChartSeries();
@@ -3417,15 +3406,15 @@
         els.charts.legendBody.addEventListener('click', (e) => {
           const target = e.target;
           if (target && target.matches('button.chart-color-btn')) {
-            const id = Number(target.dataset.sensor);
-            if (!Number.isFinite(id)) return;
-            openColorDialog(id);
+            const name = target.dataset.sensor;
+            if (!name) return;
+            openColorDialog(name);
             return;
           }
           if (target && target.matches('button.chart-remove-btn')) {
-            const id = Number(target.dataset.sensor);
-            if (!Number.isFinite(id)) return;
-            const filtered = chartState.selected.filter(x => x !== id);
+            const name = target.dataset.sensor;
+            if (!name) return;
+            const filtered = chartState.selected.filter(x => x !== name);
             applyChartSensors(filtered);
             return;
           }
@@ -3434,9 +3423,9 @@
           }
           const row = target.closest('tr[data-sensor]');
           if (!row) return;
-          const id = Number(row.dataset.sensor);
-          if (!Number.isFinite(id)) return;
-          chartState.focused = chartState.focused === id ? null : id;
+          const name = row.dataset.sensor;
+          if (!name) return;
+          chartState.focused = chartState.focused === name ? null : name;
           if (chartState.chart) {
             syncChartData();
           }
@@ -3447,12 +3436,12 @@
         els.charts.suggestBox.addEventListener('mousedown', (e) => {
           const target = e.target.closest('.chart-suggest-item');
           if (!target) return;
-          const id = Number(target.dataset.sensor);
-          if (!Number.isFinite(id)) return;
+          const name = target.dataset.sensor;
+          if (!name) return;
           if (chartState.selected.length >= chartMaxSeries) {
             return;
           }
-          applyChartSensors([...chartState.selected, id]);
+          applyChartSensors([...chartState.selected, name]);
           hideChartSuggestions();
         });
       }
@@ -3472,7 +3461,7 @@
             e.preventDefault();
             const active = chartState.suggest.items[chartState.suggest.active];
             if (active) {
-              applyChartSensors([...chartState.selected, active.id]);
+              applyChartSensors([...chartState.selected, active.name]);
               hideChartSuggestions();
             } else {
               addSensorsFromInput();

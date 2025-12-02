@@ -4,11 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/pv/uniset-timemachine-go/pkg/config"
 )
 
 // SensorUpdate описывает новое значение датчика, подготовленное к публикации.
 type SensorUpdate struct {
-	ID    int64
+	Hash  int64   // cityhash64(name) - основной идентификатор
 	Value float64
 }
 
@@ -40,4 +42,5 @@ func (c *StdoutClient) Send(_ context.Context, payload StepPayload) error {
 }
 
 // ParamFormatter позволяет переопределить имя параметра для датчика.
-type ParamFormatter func(update SensorUpdate) string
+// Получает hash и registry для определения формата: ID из конфига или name.
+type ParamFormatter func(hash int64, registry *config.SensorRegistry) string

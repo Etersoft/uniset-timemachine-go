@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UNISETPLC>
+  <ObjectsMap idfromfile="0">
+    <sensors name="Sensors">
+      <item name="SES.AMC1_OPCUA_EM1" textname="Управление EM процессом обмена по opcua с ПЛК управления СЭС1" default="3" iotype="DI" />
+      <item name="SES.AMC1_OPCUA_EM2" textname="Управление EM процессом обмена по opcua с ПЛК управления СЭС2" default="3" iotype="DI" />
+      <item name="SES.PLC_IsMain1" textname="Текущий ПЛК - основной" iotype="DI" />
+      <item name="SES.PLC_IsMain2" textname="Текущий ПЛК - основной" iotype="DI" />
+      <item name="TestAnalog1" textname="Тестовый аналоговый датчик 1" iotype="AI" />
+      <item name="TestAnalog2" textname="Тестовый аналоговый датчик 2" iotype="AO" />
+    </sensors>
+  </ObjectsMap>
+</UNISETPLC>

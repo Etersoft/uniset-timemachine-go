@@ -162,3 +162,49 @@ func TestLoadXMLWithExplicitID(t *testing.T) {
 		t.Fatalf("expected ID 123, got %d", id)
 	}
 }
+
+func TestLoadXMLWithGlobalIDFromFile0(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sensors.xml")
+	// idfromfile="0" на уровне ObjectsMap - все датчики без явного ID
+	content := `<?xml version="1.0" encoding="utf-8"?>
+<UNISETPLC>
+  <ObjectsMap idfromfile="0">
+    <sensors name="Sensors">
+      <item name="Sensor1" textname="Датчик 1" iotype="DI"/>
+      <item name="Sensor2" textname="Датчик 2" iotype="AI"/>
+      <item name="Sensor3" textname="Датчик 3" iotype="AO"/>
+    </sensors>
+  </ObjectsMap>
+</UNISETPLC>`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	// Проверяем, что все датчики загружены
+	if len(cfg.Sensors) != 3 {
+		t.Fatalf("expected 3 sensors, got %d", len(cfg.Sensors))
+	}
+
+	// Проверяем, что ID сгенерированы из hash32(name)
+	for _, name := range []string{"Sensor1", "Sensor2", "Sensor3"} {
+		expectedID := int64(Hash32ForName(name))
+		if id, ok := cfg.Sensors[name]; !ok {
+			t.Fatalf("sensor %q not found", name)
+		} else if id != expectedID {
+			t.Fatalf("sensor %q: expected generated ID %d, got %d", name, expectedID, id)
+		}
+	}
+
+	// Проверяем метаданные
+	if meta, ok := cfg.SensorMeta["Sensor1"]; !ok {
+		t.Fatal("SensorMeta for Sensor1 not found")
+	} else if meta.IOType != "DI" {
+		t.Fatalf("expected iotype DI, got %s", meta.IOType)
+	}
+}

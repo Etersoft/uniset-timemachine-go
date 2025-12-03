@@ -345,6 +345,8 @@ func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	// Карта для проверки коллизий hash32(name) между всеми датчиками
 	hash32seen := make(map[uint32]string)
+	// Глобальный idfromfile из ObjectsMap (по умолчанию пустая строка = ID обязателен)
+	globalIDFromFile := ""
 
 	for {
 		tok, err := decoder.Token()
@@ -358,12 +360,22 @@ func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
 		if !ok {
 			continue
 		}
+		// Ищем idfromfile на уровне ObjectsMap
+		if strings.EqualFold(start.Name.Local, "ObjectsMap") {
+			for _, attr := range start.Attr {
+				if strings.EqualFold(attr.Name.Local, "idfromfile") {
+					globalIDFromFile = attr.Value
+					break
+				}
+			}
+			continue
+		}
 		if strings.EqualFold(start.Name.Local, "sensors") {
 			var block xmlSensors
 			if err := decoder.DecodeElement(&block, &start); err != nil {
 				return fmt.Errorf("config: failed to parse <sensors>: %w", err)
 			}
-			if err := addXMLSensors(cfg, block.Items, hash32seen); err != nil {
+			if err := addXMLSensors(cfg, block.Items, hash32seen, globalIDFromFile); err != nil {
 				return err
 			}
 			for _, incl := range block.Includes {
@@ -374,7 +386,7 @@ func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
 				if !filepath.IsAbs(includePath) {
 					includePath = filepath.Join(baseDir, includePath)
 				}
-				if err := loadIncludedSensors(cfg, includePath, hash32seen); err != nil {
+				if err := loadIncludedSensors(cfg, includePath, hash32seen, globalIDFromFile); err != nil {
 					return err
 				}
 			}
@@ -387,24 +399,32 @@ func parseXMLSensors(cfg *Config, data []byte, baseDir string) error {
 	}
 	return nil
 }
-func addXMLSensors(cfg *Config, items []xmlSensor, hash32seen map[uint32]string) error {
+func addXMLSensors(cfg *Config, items []xmlSensor, hash32seen map[uint32]string, globalIDFromFile string) error {
 	for _, item := range items {
 		if item.Name == "" {
 			continue
+		}
+
+		// Определяем эффективное значение idfromfile:
+		// - если у датчика есть свой idfromfile, используем его
+		// - иначе используем глобальный из ObjectsMap
+		effectiveIDFromFile := item.IDFromFile
+		if effectiveIDFromFile == "" {
+			effectiveIDFromFile = globalIDFromFile
 		}
 
 		// Проверка: если idfromfile != "0", то ID обязан быть задан
 		// idfromfile="0" означает, что ID не задан в конфиге
 		// idfromfile="1" или отсутствие атрибута означает, что ID должен быть указан
 		var idPtr *int64
-		if item.IDFromFile == "0" {
+		if effectiveIDFromFile == "0" {
 			// Генерируем config_id из MurmurHash2(name) для совместимости с UniSet
 			generatedID := int64(Hash32ForName(item.Name))
 			idPtr = &generatedID
 		} else {
 			// idfromfile="1" или не задан - ID обязателен
 			if item.ID == 0 {
-				return fmt.Errorf("config: sensor %q has idfromfile=%q but no id attribute", item.Name, item.IDFromFile)
+				return fmt.Errorf("config: sensor %q has idfromfile=%q but no id attribute", item.Name, effectiveIDFromFile)
 			}
 			id := item.ID
 			idPtr = &id
@@ -435,7 +455,7 @@ func addXMLSensors(cfg *Config, items []xmlSensor, hash32seen map[uint32]string)
 	return nil
 }
 
-func loadIncludedSensors(cfg *Config, path string, hash32seen map[uint32]string) error {
+func loadIncludedSensors(cfg *Config, path string, hash32seen map[uint32]string, globalIDFromFile string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("config: read include %s: %w", path, err)
@@ -446,5 +466,5 @@ func loadIncludedSensors(cfg *Config, path string, hash32seen map[uint32]string)
 	if err := xml.Unmarshal(data, &block); err != nil {
 		return fmt.Errorf("config: parse include %s: %w", path, err)
 	}
-	return addXMLSensors(cfg, block.Items, hash32seen)
+	return addXMLSensors(cfg, block.Items, hash32seen, globalIDFromFile)
 }

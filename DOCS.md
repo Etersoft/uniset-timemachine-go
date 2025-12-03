@@ -30,9 +30,9 @@ go run ./cmd/timemachine \
 
 ### API v2 (pending range/seek, рабочий список)
 
-- `GET /api/v2/sensors` — словарь всех датчиков (`id,name,textname,iotype`) и `count`. Используется UI для автодополнения.
-- `GET /api/v2/job/sensors` — текущий рабочий список ID, которым оперирует проигрыватель. Возвращает `sensors`, `count`, `default` (true, если выбран весь список).
-- `POST /api/v2/job/sensors` — установить рабочий список. Body: `{"sensors":[id1,id2,...]}`. Ответ: `status`, `sensors` (принятый список), `accepted_count`, `rejected` (число отброшенных), `count`, `default` (true, если выбран весь список). Если переданы только невалидные ID — `400`.
+- `GET /api/v2/sensors` — словарь всех датчиков (`name,config_id,textname,iotype`) и `count`. Используется UI для автодополнения.
+- `GET /api/v2/job/sensors` — текущий рабочий список имён датчиков, которым оперирует проигрыватель. Возвращает `sensors`, `count`, `default` (true, если выбран весь список).
+- `POST /api/v2/job/sensors` — установить рабочий список. Body: `{"sensors":["name1","name2",...]}`. Ответ: `status`, `sensors` (принятый список), `accepted_count`, `rejected` (число отброшенных), `count`, `default` (true, если выбран весь список). Если переданы только невалидные имена — `400`.
 - `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне истории.
 - `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max и `sensor_count`.
 - `POST /api/v2/job/seek` — перемотка; если job не запущен, запоминает pending seek.
@@ -138,3 +138,43 @@ curl -s http://localhost:8080/healthz   # ok
 - Шаг вперёд/назад выполняются из `paused` и оставляют задачу в `paused`; при достижении начала/конца диапазона кнопки в UI блокируются.
 - Snapshot/state не возвращают значения датчиков — только метаданные; при необходимости можно расширить API.
 - Все сетевые/SM параметры задаются при старте процесса, не через API.
+
+## Идентификация датчиков
+
+Система использует имя датчика (`name`) как основной идентификатор для обмена между UI и сервером. Внутренняя идентификация построена на хешах для совместимости с UniSet:
+
+### Хеш-функции
+
+- **CityHash64** (`hash64`) — основной внутренний идентификатор датчика. Вычисляется как `cityHash64(name)`. Совместим с `uniset::hash64()`.
+- **MurmurHash2** (`hash32`, seed=0) — используется для `config_id` при `idfromfile="0"` и для колонки `uniset_hid` в ClickHouse. Совместим с `uniset::hash32()`.
+
+### Режимы работы с ClickHouse
+
+При подключении к ClickHouse автоматически определяется режим работы (по приоритету):
+
+1. **uniset_hid** (UInt32) — MurmurHash2 от имени датчика, совместим с UniSet
+2. **name_hid** (Int64) — CityHash64 от имени датчика
+3. **name** (String) — fallback на строковое имя
+
+### Поддержка idfromfile="0"
+
+Если в XML конфиге датчик имеет атрибут `idfromfile="0"` (ID не задан):
+- Автоматически генерируется `config_id = MurmurHash2(name)`
+- Это позволяет использовать PostgreSQL/SQLite без явных ID в конфиге
+- Гарантируется совместимость с UniSet через `uniset::hash32()`
+
+### WebSocket формат
+
+Обновления датчиков передаются по WebSocket в компактном формате:
+```json
+{
+  "type": "updates",
+  "step_id": 123,
+  "step_unix": 1717200000000,
+  "u": {
+    "SensorName1": [123.45, 1],
+    "SensorName2": [0.0, 0]
+  }
+}
+```
+Где `u[name] = [value, has_value]` — значение и флаг наличия (1/0).

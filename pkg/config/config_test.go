@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -86,5 +87,78 @@ func TestLoadJSONAndResolve(t *testing.T) {
 
 	if _, err := cfg.Resolve("NoMatch*"); err == nil {
 		t.Fatal("expected error for unmatched pattern")
+	}
+}
+
+func TestLoadXMLMissingID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sensors.xml")
+	// idfromfile="1" но id не указан - должна быть ошибка
+	content := `<?xml version="1.0" encoding="utf-8"?>
+<uniset>
+	<sensors>
+		<item name="Sensor1" idfromfile="1" textname="Sensor without ID"/>
+	</sensors>
+</uniset>`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for sensor with idfromfile=1 but no id attribute")
+	}
+	if got := err.Error(); !strings.Contains(got, "no id attribute") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadXMLWithIDFromFile0(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sensors.xml")
+	// idfromfile="0" - ID генерируется из hash32(name)
+	content := `<?xml version="1.0" encoding="utf-8"?>
+<uniset>
+	<sensors>
+		<item name="TestSensor" idfromfile="0" textname="Test sensor"/>
+	</sensors>
+</uniset>`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	// Проверяем, что ID сгенерирован из hash32(name)
+	expectedID := int64(Hash32ForName("TestSensor"))
+	if id, ok := cfg.Sensors["TestSensor"]; !ok || id != expectedID {
+		t.Fatalf("expected generated ID %d, got %d", expectedID, id)
+	}
+}
+
+func TestLoadXMLWithExplicitID(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sensors.xml")
+	// Обычный случай с явным ID
+	content := `<?xml version="1.0" encoding="utf-8"?>
+<uniset>
+	<sensors>
+		<item id="123" name="MySensor" textname="Sensor with explicit ID"/>
+	</sensors>
+</uniset>`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+
+	if id, ok := cfg.Sensors["MySensor"]; !ok || id != 123 {
+		t.Fatalf("expected ID 123, got %d", id)
 	}
 }

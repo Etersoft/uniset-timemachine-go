@@ -97,6 +97,10 @@ go test ./internal/storage/sqlite -v
 
 # Run Playwright E2E tests (requires Docker)
 make js-tests
+
+# Run single Playwright test file (--entrypoint "" is required!)
+docker-compose --profile tests run --rm --entrypoint "" playwright \
+  npx playwright test ui-charts-page.spec.ts -c tests/playwright.config.ts --reporter=list
 ```
 
 ### Database Setup

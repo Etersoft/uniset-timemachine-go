@@ -7,6 +7,7 @@ import (
 	"time"
 
 	ch "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/aviddiviner/go-murmur"
 	"github.com/go-faster/city"
 
 	"github.com/pv/uniset-timemachine-go/internal/storage"
@@ -24,11 +25,20 @@ type Config struct {
 	Resolver Resolver
 }
 
+// hashMode определяет режим работы с хешами в ClickHouse.
+type hashMode int
+
+const (
+	hashModeName      hashMode = iota // fallback: работа через name (String)
+	hashModeNameHID                   // работа через name_hid (CityHash64)
+	hashModeUnisetHID                 // работа через uniset_hid (MurmurHash2)
+)
+
 type Store struct {
-	conn       ch.Conn
-	table      string
-	resolver   Resolver
-	useNameHID bool // true если таблица содержит колонку name_hid
+	conn     ch.Conn
+	table    string
+	resolver Resolver
+	mode     hashMode // режим работы с хешами
 }
 
 const filterTable = "tm_sensors"
@@ -73,28 +83,37 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 
 	store := &Store{conn: conn, table: table, resolver: cfg.Resolver}
 
-	// Проверяем наличие колонки name_hid в таблице
-	store.useNameHID = store.checkNameHIDColumn(ctx)
+	// Определяем режим работы: сначала проверяем uniset_hid, затем name_hid, иначе name
+	store.mode = store.detectHashMode(ctx)
 
 	return store, nil
 }
 
-// checkNameHIDColumn проверяет наличие колонки name_hid в таблице.
-func (s *Store) checkNameHIDColumn(ctx context.Context) bool {
-	// Извлекаем database и table из полного имени
+// detectHashMode определяет режим работы с хешами.
+// Приоритет: uniset_hid (MurmurHash2) > name_hid (CityHash64) > name (String).
+func (s *Store) detectHashMode(ctx context.Context) hashMode {
 	parts := strings.SplitN(s.table, ".", 2)
 	if len(parts) != 2 {
-		return false
+		return hashModeName
 	}
 	database, tableName := parts[0], parts[1]
 
-	query := `SELECT count() FROM system.columns WHERE database = ? AND table = ? AND name = 'name_hid'`
+	// Проверяем наличие колонки uniset_hid (предпочтительный режим для UniSet совместимости)
+	query := `SELECT count() FROM system.columns WHERE database = ? AND table = ? AND name = 'uniset_hid'`
 	row := s.conn.QueryRow(ctx, query, database, tableName)
 	var count uint64
-	if err := row.Scan(&count); err != nil {
-		return false
+	if err := row.Scan(&count); err == nil && count > 0 {
+		return hashModeUnisetHID
 	}
-	return count > 0
+
+	// Проверяем наличие колонки name_hid
+	query = `SELECT count() FROM system.columns WHERE database = ? AND table = ? AND name = 'name_hid'`
+	row = s.conn.QueryRow(ctx, query, database, tableName)
+	if err := row.Scan(&count); err == nil && count > 0 {
+		return hashModeNameHID
+	}
+
+	return hashModeName
 }
 
 func (s *Store) Close() {
@@ -113,9 +132,12 @@ func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]
 	}
 
 	var query string
-	if s.useNameHID {
+	switch s.mode {
+	case hashModeUnisetHID:
+		query = fmt.Sprintf(warmupSQLUnisetHID, s.table, filterTable)
+	case hashModeNameHID:
 		query = fmt.Sprintf(warmupSQLNameHID, s.table, filterTable)
-	} else {
+	default:
 		query = fmt.Sprintf(warmupSQLName, s.table, filterTable)
 	}
 
@@ -131,12 +153,21 @@ func (s *Store) Warmup(ctx context.Context, sensors []int64, from time.Time) ([]
 		var value float64
 		var hash int64
 
-		if s.useNameHID {
+		switch s.mode {
+		case hashModeUnisetHID:
+			// Читаем uniset_hid и конвертируем обратно в CityHash64 через name
+			var unisetHID uint32
+			var name string
+			if err := rows.Scan(&unisetHID, &name, &ts, &value); err != nil {
+				return nil, fmt.Errorf("clickhouse: warmup scan: %w", err)
+			}
+			hash = int64(city.Hash64([]byte(name)))
+		case hashModeNameHID:
 			// Читаем name_hid напрямую
 			if err := rows.Scan(&hash, &ts, &value); err != nil {
 				return nil, fmt.Errorf("clickhouse: warmup scan: %w", err)
 			}
-		} else {
+		default:
 			// Читаем name и конвертируем через cityhash64
 			var name string
 			if err := rows.Scan(&name, &ts, &value); err != nil {
@@ -173,9 +204,12 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 		}
 
 		var query string
-		if s.useNameHID {
+		switch s.mode {
+		case hashModeUnisetHID:
+			query = fmt.Sprintf(streamSQLUnisetHID, s.table, filterTable)
+		case hashModeNameHID:
 			query = fmt.Sprintf(streamSQLNameHID, s.table, filterTable)
-		} else {
+		default:
 			query = fmt.Sprintf(streamSQLName, s.table, filterTable)
 		}
 
@@ -197,13 +231,23 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 				var value float64
 				var hash int64
 
-				if s.useNameHID {
+				switch s.mode {
+				case hashModeUnisetHID:
+					var unisetHID uint32
+					var name string
+					if err := rows.Scan(&unisetHID, &name, &ts, &value); err != nil {
+						rows.Close()
+						errCh <- fmt.Errorf("clickhouse: stream scan: %w", err)
+						return
+					}
+					hash = int64(city.Hash64([]byte(name)))
+				case hashModeNameHID:
 					if err := rows.Scan(&hash, &ts, &value); err != nil {
 						rows.Close()
 						errCh <- fmt.Errorf("clickhouse: stream scan: %w", err)
 						return
 					}
-				} else {
+				default:
 					var name string
 					if err := rows.Scan(&name, &ts, &value); err != nil {
 						rows.Close()
@@ -247,7 +291,16 @@ func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) 
 	}
 
 	var query string
-	if s.useNameHID {
+	switch s.mode {
+	case hashModeUnisetHID:
+		query = fmt.Sprintf(`
+SELECT min(timestamp) AS min_ts,
+       max(timestamp) AS max_ts,
+       count(DISTINCT uniset_hid) AS sensor_count
+FROM %s
+WHERE uniset_hid IN (SELECT uniset_hid FROM %s)
+`, s.table, filterTable)
+	case hashModeNameHID:
 		query = fmt.Sprintf(`
 SELECT min(timestamp) AS min_ts,
        max(timestamp) AS max_ts,
@@ -255,7 +308,7 @@ SELECT min(timestamp) AS min_ts,
 FROM %s
 WHERE name_hid IN (SELECT name_hid FROM %s)
 `, s.table, filterTable)
-	} else {
+	default:
 		query = fmt.Sprintf(`
 SELECT min(timestamp) AS min_ts,
        max(timestamp) AS max_ts,
@@ -304,16 +357,55 @@ func (s *Store) hashesToNames(hashes []int64) ([]string, error) {
 const defaultWindow = 5 * time.Second
 
 // refreshFilter заполняет временную таблицу для фильтрации по датчикам.
-// В зависимости от режима (useNameHID) использует либо name_hid Int64, либо name String.
+// В зависимости от режима использует uniset_hid (UInt32), name_hid (Int64), или name (String).
 func (s *Store) refreshFilter(ctx context.Context, hashes []int64) error {
 	if len(hashes) == 0 {
 		return nil
 	}
 
-	if s.useNameHID {
+	switch s.mode {
+	case hashModeUnisetHID:
+		return s.refreshFilterUnisetHID(ctx, hashes)
+	case hashModeNameHID:
 		return s.refreshFilterNameHID(ctx, hashes)
+	default:
+		return s.refreshFilterName(ctx, hashes)
 	}
-	return s.refreshFilterName(ctx, hashes)
+}
+
+// refreshFilterUnisetHID заполняет фильтр по uniset_hid (MurmurHash2 32-bit).
+// Конвертирует CityHash64 hashes в MurmurHash2 через resolver.
+func (s *Store) refreshFilterUnisetHID(ctx context.Context, hashes []int64) error {
+	// Конвертируем hashes в uniset_hid через name
+	names, err := s.hashesToNames(hashes)
+	if err != nil {
+		return err
+	}
+
+	unisetHIDs := make([]uint32, 0, len(names))
+	for _, name := range names {
+		unisetHIDs = append(unisetHIDs, murmur.MurmurHash2([]byte(name), 0))
+	}
+
+	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE IF NOT EXISTS %s (uniset_hid UInt32)", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: create filter table: %w", err)
+	}
+	if err := s.conn.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: truncate filter table: %w", err)
+	}
+	batch, err := s.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s (uniset_hid)", filterTable))
+	if err != nil {
+		return fmt.Errorf("clickhouse: prepare filter batch: %w", err)
+	}
+	for _, hid := range unisetHIDs {
+		if err := batch.Append(hid); err != nil {
+			return fmt.Errorf("clickhouse: append filter uniset_hid: %w", err)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("clickhouse: send filter batch: %w", err)
+	}
+	return nil
 }
 
 // refreshFilterNameHID заполняет фильтр по name_hid (Int64).
@@ -367,6 +459,29 @@ func (s *Store) refreshFilterName(ctx context.Context, hashes []int64) error {
 	}
 	return nil
 }
+
+// SQL для режима uniset_hid (UInt32, MurmurHash2)
+// Возвращаем uniset_hid и name для конвертации обратно в CityHash64
+const warmupSQLUnisetHID = `
+SELECT
+    uniset_hid,
+    name,
+    argMax(timestamp, timestamp) AS ts,
+    argMax(value, timestamp) AS value
+FROM %s
+WHERE uniset_hid IN (SELECT uniset_hid FROM %s)
+  AND timestamp <= @from
+GROUP BY uniset_hid, name;
+`
+
+const streamSQLUnisetHID = `
+SELECT uniset_hid, name, timestamp, value
+FROM %s
+WHERE uniset_hid IN (SELECT uniset_hid FROM %s)
+  AND timestamp >= @from
+  AND timestamp < @to
+ORDER BY timestamp, uniset_hid;
+`
 
 // SQL для режима name_hid (Int64)
 const warmupSQLNameHID = `

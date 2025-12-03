@@ -13,8 +13,17 @@
 ## Конфигурация
 
 `pkg/config` умеет читать два формата:
-- UniSet XML (`config/test.xml`) — берём датчики из секции `<sensors><item id="..." name="..." textname="..."/>`.
+- UniSet XML (`config/test.xml`) — берём датчики из секции `<sensors><item id="..." name="..." textname="..."/>`. Поддерживается `idfromfile="0"` для датчиков без явного ID.
 - Упрощённый JSON (`config/example.json`) — удобно для быстрых тестов и моков.
+
+### Идентификация датчиков
+
+Система использует **имя датчика** (`name`) как основной идентификатор для обмена между UI и сервером. Внутренняя идентификация построена на хешах для совместимости с UniSet:
+
+- **CityHash64** — основной внутренний хеш, совместим с `uniset::hash64()`
+- **MurmurHash2** (seed=0) — используется для `config_id` при `idfromfile="0"` и колонки `uniset_hid` в ClickHouse, совместим с `uniset::hash32()`
+
+При `idfromfile="0"` автоматически генерируется `config_id = MurmurHash2(name)`, что позволяет использовать PostgreSQL/SQLite без явных ID в XML конфиге.
 
 CLI принимает флаг `--confile` с путём к XML/JSON и `--slist` с именем набора (или `ALL`, или списком имён). Дополнительно поддерживаются glob-паттерны (`--slist "Sensor100*"` выберет все сенсоры из блока `Sensor100XX_S`). Для XML наборы не задаются и `--slist` должен перечислять имена вручную/по шаблону или использовать `ALL`. Выход по умолчанию — `stdout`; для SharedMemory используйте `--output http://...`:
 
@@ -99,7 +108,7 @@ go run ./cmd/timemachine --generate-config config/custom.yaml  # встроен�
 ## Подключение к БД
 
 - `--db postgres://user:pass@host/dbname` — загрузчик `internal/storage/postgres` (pgx/pool). История считывается оконными запросами с `make_interval(microseconds => time_usec)`. Поддерживает `--show-range`.
-- `--db clickhouse://user:pass@host:9000/uniset` — загрузчик `internal/storage/clickhouse` (native driver). По умолчанию читает таблицу `main_history` (меняется флагом `--ch-table`, можно указать `db.table`). Ожидает, что имена датчиков из `config/test.xml` записаны в поле `name`. Поддерживает `--show-range`.
+- `--db clickhouse://user:pass@host:9000/uniset` — загрузчик `internal/storage/clickhouse` (native driver). По умолчанию читает таблицу `main_history` (меняется флагом `--ch-table`, можно указать `db.table`). Автоматически определяет режим работы: `uniset_hid` (MurmurHash2) → `name_hid` (CityHash64) → `name` (String). Поддерживает `--show-range`.
 - `--db sqlite://test.db` или `--db file:test.db` — загрузчик `internal/storage/sqlite` (database/sql + modernc.org/sqlite). Список датчиков переносится во временную таблицу `tm_sensors`, чтобы не упираться в лимит параметров `IN`, есть команда `--show-range`.
 - Без `--db` используется `memstore` с детерминированными данными для тестов.
 - Параметр `--window` задаёт длительность окна предварительной выборки (по умолчанию 1 минута). Флаг `--batch-size` ограничивает количество обновлений в одном пакете отправки (по умолчанию 1024).
@@ -165,22 +174,21 @@ docker-compose --profile tests build timemachine
 docker-compose --profile tests up -d --force-recreate timemachine
 
 # Запуск всех UI тестов (требует запущенного timemachine контейнера)
-docker-compose --profile tests run --rm playwright npx playwright test -c tests/playwright.config.ts --reporter=list
+docker-compose --profile tests run --rm playwright
 
-# Запуск только тестов session control
-docker-compose --profile tests run --rm playwright npx playwright test tests/ui-session-control-new.spec.ts -c tests/playwright.config.ts --reporter=list
+# Запуск одного тестового файла (ВАЖНО: --entrypoint "" обязателен!)
+docker-compose --profile tests run --rm --entrypoint "" playwright \
+  npx playwright test ui-charts-page.spec.ts -c tests/playwright.config.ts --reporter=list
 
-# Полный цикл: пересборка + запуск + тесты
+# Запуск конкретного теста по номеру строки
+docker-compose --profile tests run --rm --entrypoint "" playwright \
+  npx playwright test ui-session-control-new.spec.ts:5 -c tests/playwright.config.ts --reporter=list
+
+# Полный цикл: пересборка + запуск + все тесты
 docker-compose --profile tests build timemachine && \
   docker-compose --profile tests up -d --force-recreate timemachine && \
   sleep 5 && \
-  docker-compose --profile tests run --rm playwright npx playwright test tests/ui-session-control.spec.ts -c tests/playwright.config.ts --reporter=list
-```
-
-Для отладки можно запустить конкретный тест по номеру строки:
-
-```bash
-docker-compose --profile tests run --rm playwright npx playwright test 'tests/ui-session-control-new.spec.ts:5' -c tests/playwright.config.ts --reporter=list
+  docker-compose --profile tests run --rm playwright
 ```
 
 ### Генерация крупных наборов для SQLite
@@ -197,3 +205,7 @@ make clean-bench
 `make bench` теперь читает параметры из `CONFIG_YAML` (по умолчанию `config/config.yaml`). Хотите другой сценарий — создайте отдельный YAML (например, `config/config-sqlite.yaml` с `db: sqlite://sqlite-large.db`) и передайте `CONFIG_YAML=config/config-sqlite.yaml make bench`. При необходимости добавляйте единичные флаги через `BENCH_FLAGS`, например `BENCH_FLAGS="--show-range" make bench`. `--batch-size` задаёт, сколько обновлений помещается в один `/set`: при ~5000 датчиках каждая итерация разбивается примерно на 10 запросов по 500 записей. Паттерн `Sensor1????_S` охватывает все специальные датчики `Sensor10001_S` … `Sensor15099_S` из `config/test.xml`. Файл `config/generated-sensors.xml` подключён в `config/test.xml` через XInclude, поэтому достаточно пересоздать его командой `make gen-sensors`.
 
 Для быстрой проверки связи с SM используйте `make check-sm SM_TEST_SENSOR=10001 SM_TEST_SUPPLIER=TestProc`, он отправляет одиночный `/set` и проверяет `/get`. Цель автоматически пробует подхватить `SM_CONFIG_YAML` (по умолчанию `config/config.yaml`), чтобы взять `output.sm_url` и `output.sm_supplier` без явных флагов; при необходимости задайте `SM_EXTRA_FLAGS="--value 42"` или выключите YAML `SM_CONFIG_YAML=`. После запуска нагрузочного теста выполните `make clean-bench`, чтобы удалить `sqlite-large.db` и сгенерированный список сенсоров.
+
+## Разработка
+
+При разработке этого проекта использовался [Claude AI](https://claude.ai/) (Anthropic) через [Claude Code](https://claude.ai/code) для помощи в написании кода, тестов и документации.

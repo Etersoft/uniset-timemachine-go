@@ -1,8 +1,14 @@
 package config
 
-import "github.com/go-faster/city"
+import (
+	"github.com/aviddiviner/go-murmur"
+	"github.com/go-faster/city"
+)
 
 // SensorKey представляет ключ датчика с уникальным hash идентификатором.
+// Совместимость с UniSet:
+//   - Hash (int64) использует CityHash64 - соответствует uniset::hash64()
+//   - Hash32ForName (uint32) использует MurmurHash2 seed=0 - соответствует uniset::hash32()
 type SensorKey struct {
 	Name string // имя датчика (всегда есть)
 	ID   *int64 // ID из конфига (nil если idfromfile="0")
@@ -31,7 +37,15 @@ func (k *SensorKey) ConfigID() int64 {
 	return 0
 }
 
-// HashForName вычисляет cityhash64 для имени датчика.
+// HashForName вычисляет CityHash64 для имени датчика.
+// Совместимо с uniset::hash64().
 func HashForName(name string) int64 {
 	return int64(city.Hash64([]byte(name)))
+}
+
+// Hash32ForName вычисляет MurmurHash2 (32-bit, seed=0) для имени датчика.
+// Совместимо с uniset::hash32().
+// Используется для генерации config_id когда idfromfile="0".
+func Hash32ForName(name string) uint32 {
+	return murmur.MurmurHash2([]byte(name), 0)
 }

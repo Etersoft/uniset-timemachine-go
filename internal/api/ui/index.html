@@ -1739,6 +1739,28 @@
       chartState.suggest = { items: [], active: -1, locked: false, lastQuery: chartState.suggest.lastQuery || '' };
     }
 
+    // Показать все доступные датчики (для навигации стрелками при пустом поле)
+    function showAllChartSuggestions() {
+      if (!els.charts.suggestBox) return;
+      const items = [];
+      sensorIndex.byName.forEach((meta, name) => {
+        if (!isWorkingSensor(name)) return;
+        if (chartState.selected.includes(name)) return;
+        items.push({ name });
+      });
+      items.sort((a, b) => a.name.localeCompare(b.name));
+      const limited = items.slice(0, 50);
+      if (!limited.length) return;
+      chartState.suggest.items = limited;
+      chartState.suggest.active = 0;
+      chartState.suggest.locked = true;
+      els.charts.suggestBox.innerHTML = limited.map((item, idx) => {
+        const activeClass = idx === 0 ? 'active' : '';
+        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.name}">${chartLabelByName(item.name)}</div>`;
+      }).join('');
+      els.charts.suggestBox.style.display = 'block';
+    }
+
     function moveSuggestActive(delta) {
       const items = chartState.suggest.items || [];
       if (!items.length || !els.charts.suggestBox) return;
@@ -2171,7 +2193,7 @@
       if (!chartState.selected.length && canAutoAdd && updates?.length) {
         const names = Array.from(new Set((updates || []).map(u => u.name).filter(n => typeof n === 'string' && n)));
         if (names.length) {
-          applyChartSensors(names);
+          applyChartSensors(names, true); // автоматическое добавление — фильтруем по наличию значения
         }
       }
       if (!chartState.selected.length) return;
@@ -2225,7 +2247,7 @@
       }
     }
 
-    function applyChartSensors(list) {
+    function applyChartSensors(list, filterByValue = false) {
       if ((chartState.selected.length || 0) >= chartAutoAddLimit && !list.length) {
         // Если уже достаточно линий, не авто-добавляем новые без явного списка.
         return;
@@ -2234,8 +2256,13 @@
       if (normalized.length > chartMaxSeries) {
         normalized.length = chartMaxSeries;
       }
-      const withValues = normalized.filter(sensorHasValue);
-      const picked = withValues.length ? withValues : normalized;
+      // Фильтрация по наличию значения только при автоматическом добавлении (filterByValue=true)
+      // При явном выборе пользователем (filterByValue=false) добавляем все датчики
+      let picked = normalized;
+      if (filterByValue) {
+        const withValues = normalized.filter(sensorHasValue);
+        picked = withValues.length ? withValues : normalized;
+      }
       chartState.selected = picked.slice(0, chartMaxSeries);
       if (chartState.focused !== null && !chartState.selected.includes(chartState.focused)) {
         chartState.focused = null;
@@ -2293,7 +2320,7 @@
       const params = state.model.params || state.model.Params || {};
       const sensors = params.Sensors || params.sensors;
       if (Array.isArray(sensors) && sensors.length && canAutoAddSensors(sensors)) {
-        applyChartSensors(sensors);
+        applyChartSensors(sensors, true); // автоматическое добавление — фильтруем по наличию значения
       }
     }
 
@@ -2314,7 +2341,7 @@
       if (sig && sig !== chartState.lastParamsSig) {
         chartState.lastParamsSig = sig;
         if (hasSensors && canAutoAddSensors(sensors)) {
-          applyChartSensors(sensors);
+          applyChartSensors(sensors, true); // автоматическое добавление — фильтруем по наличию значения
         } else if (!chartState.selected.length) {
           clearChart();
         }
@@ -3444,6 +3471,19 @@
           applyChartSensors([...chartState.selected, name]);
           hideChartSuggestions();
         });
+        els.charts.suggestBox.addEventListener('mouseover', (e) => {
+          const target = e.target.closest('.chart-suggest-item');
+          if (!target) return;
+          const items = chartState.suggest.items || [];
+          const idx = items.findIndex(it => it.name === target.dataset.sensor);
+          if (idx !== -1 && idx !== chartState.suggest.active) {
+            chartState.suggest.active = idx;
+            chartState.suggest.locked = true;
+            Array.from(els.charts.suggestBox.children).forEach((el, i) => {
+              el.classList.toggle('active', i === idx);
+            });
+          }
+        });
       }
       if (els.charts.window) {
         els.charts.window.addEventListener('change', () => {
@@ -3459,7 +3499,15 @@
         els.charts.sensors.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            const active = chartState.suggest.items[chartState.suggest.active];
+            // Пробуем получить активный элемент из state
+            let active = chartState.suggest.items[chartState.suggest.active];
+            // Если state недоступен, но suggestBox виден, ищем активный элемент в DOM
+            if (!active && els.charts.suggestBox && els.charts.suggestBox.style.display === 'block') {
+              const activeEl = els.charts.suggestBox.querySelector('.chart-suggest-item.active');
+              if (activeEl && activeEl.dataset.sensor) {
+                active = { name: activeEl.dataset.sensor };
+              }
+            }
             if (active) {
               applyChartSensors([...chartState.selected, active.name]);
               hideChartSuggestions();
@@ -3472,6 +3520,10 @@
             hideChartSuggestions();
           } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
             e.preventDefault();
+            // Если подсказки не видны, сначала показываем их
+            if (!chartState.suggest.items.length || els.charts.suggestBox?.style.display !== 'block') {
+              showAllChartSuggestions();
+            }
             moveSuggestActive(e.key === 'ArrowDown' ? 1 : -1);
           } else {
             setTimeout(() => renderChartSuggestions(e.target.value), 0);

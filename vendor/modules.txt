@@ -17,6 +17,9 @@ github.com/ClickHouse/clickhouse-go/v2/resources
 ## explicit; go 1.13
 github.com/andybalholm/brotli
 github.com/andybalholm/brotli/matchfinder
+# github.com/aviddiviner/go-murmur v0.0.0-20150519214947-b9740d71e571
+## explicit
+github.com/aviddiviner/go-murmur
 # github.com/dustin/go-humanize v1.0.1
 ## explicit; go 1.16
 github.com/dustin/go-humanize

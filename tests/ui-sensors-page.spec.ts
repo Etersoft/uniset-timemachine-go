@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { gotoWithSession } from './utils';
 
 test('table filter and add-to-chart from Sensors tab', async ({ page }) => {
+  test.setTimeout(30_000); // Этот тест делает много операций: play/pause/stop, переключение вкладок
   await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
 

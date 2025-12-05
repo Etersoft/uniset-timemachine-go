@@ -3,7 +3,7 @@ TM_CLICKHOUSE_DSN ?= clickhouse://localhost:9000/default
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down pg-tests pg-gen-data ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run
+.PHONY: help pg-up pg-down pg-tests pg-gen-data ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run js-tests js-tests-single
 
 help:
 	@echo "Available targets:"
@@ -24,6 +24,8 @@ help:
 	@echo "  check-sm    - send test set/get to SharedMemory"
 	@echo "  clean-bench - remove generated SQLite/ClickHouse artifacts"
 	@echo "  run         - run timemachine in HTTP control mode (see RUN_FLAGS)"
+	@echo "  js-tests    - run Playwright tests (4 servers, faster)"
+	@echo "  js-tests-single - run Playwright tests (single server mode)"
 
 pg-up:
 	@docker compose up -d postgres
@@ -152,5 +154,9 @@ run:
 	@go run ./cmd/timemachine $(RUN_FLAGS)
 
 js-tests:
-	@echo "Running Playwright tests via docker-compose..."
+	@echo "Running Playwright tests (multi-server mode with 4 servers)..."
+	@docker compose --profile tests-parallel run --rm playwright-parallel
+
+js-tests-single:
+	@echo "Running Playwright tests (single-server mode)..."
 	@docker compose --profile tests run --rm playwright

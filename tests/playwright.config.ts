@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// Тесты с playback операциями (start/stop/pause) - должны идти последовательно
+// Тесты с playback операциями (start/stop/pause)
 const playbackTests = [
   'ui-control-inputs',
   'ui-http-api',
@@ -17,7 +17,8 @@ const playbackTests = [
 ];
 const playbackPattern = new RegExp(`(${playbackTests.join('|')})\\.spec\\.ts$`);
 
-export default defineConfig({
+// Конфигурация для single-server режима: с группировкой
+const singleServerConfig = defineConfig({
   testDir: '.',
   timeout: 10_000,
   fullyParallel: true,
@@ -66,3 +67,8 @@ export default defineConfig({
     },
   ],
 });
+
+// Экспортируем конфигурацию
+// В multi-server режиме sharding управляется через bash в docker-compose
+// Каждый shard получает свой BASE_URL через окружение
+export default singleServerConfig;

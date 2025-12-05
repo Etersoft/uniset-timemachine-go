@@ -36,7 +36,7 @@ services:
       timeout: 3s
       retries: 5
 
-  # Playwright tests use timemachine-test with memstore (no DB dependency)
+  # Playwright tests - single server mode (profile: tests)
   playwright:
     image: mcr.microsoft.com/playwright:v1.39.0-jammy
     container_name: tm-playwright
@@ -64,7 +64,49 @@ services:
         npx playwright install chromium
         npx playwright test -c tests/playwright.config.ts --output /tmp/playwright-results --reporter=list
 
-  # For playwright tests: memstore (no --db), fast deterministic data
+  # Playwright tests - multi-server mode (profile: tests-parallel)
+  # Запускает 4 параллельных shard, каждый на своём сервере
+  playwright-parallel:
+    image: mcr.microsoft.com/playwright:v1.39.0-jammy
+    container_name: tm-playwright-parallel
+    profiles: ["tests-parallel"]
+    working_dir: /workspace
+    shm_size: 1g
+    volumes:
+      - ./:/workspace
+      - playwright-browsers:/ms-playwright
+      - playwright-node:/workspace/node_modules
+    depends_on:
+      timemachine-test-1:
+        condition: service_healthy
+      timemachine-test-2:
+        condition: service_healthy
+      timemachine-test-3:
+        condition: service_healthy
+      timemachine-test-4:
+        condition: service_healthy
+    environment:
+      - NPM_CONFIG_CACHE=/tmp/.npm
+      - PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+      - NODE_PATH=/workspace/node_modules
+    entrypoint:
+      - bash
+      - -lc
+      - |
+        npm install --no-fund --no-audit @playwright/test@1.39.0
+        npx playwright install chromium
+
+        # Запускаем 4 shard параллельно, каждый на своём сервере
+        BASE_URL=http://timemachine-test-1:9090 npx playwright test -c tests/playwright.config.ts --shard=1/4 --output /tmp/playwright-results-1 --reporter=line &
+        BASE_URL=http://timemachine-test-2:9090 npx playwright test -c tests/playwright.config.ts --shard=2/4 --output /tmp/playwright-results-2 --reporter=line &
+        BASE_URL=http://timemachine-test-3:9090 npx playwright test -c tests/playwright.config.ts --shard=3/4 --output /tmp/playwright-results-3 --reporter=line &
+        BASE_URL=http://timemachine-test-4:9090 npx playwright test -c tests/playwright.config.ts --shard=4/4 --output /tmp/playwright-results-4 --reporter=line &
+
+        # Ждём завершения всех shards
+        wait
+        echo "All shards completed"
+
+  # Single test server for profile: tests
   timemachine-test:
     build: .
     container_name: tm-app-test
@@ -83,6 +125,38 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # Multiple test servers for profile: tests-parallel
+  timemachine-test-1: &timemachine-test-parallel
+    build: .
+    container_name: tm-app-test-1
+    profiles: ["tests-parallel"]
+    command: >
+      --http-addr 0.0.0.0:9090
+      --confile config/test.xml
+      --slist ALL
+      --output stdout
+      --save-output=false
+      --window 15s
+      --step 1s
+      --control-timeout 5s
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9090/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  timemachine-test-2:
+    <<: *timemachine-test-parallel
+    container_name: tm-app-test-2
+
+  timemachine-test-3:
+    <<: *timemachine-test-parallel
+    container_name: tm-app-test-3
+
+  timemachine-test-4:
+    <<: *timemachine-test-parallel
+    container_name: tm-app-test-4
 
   # For development: real ClickHouse data
   timemachine:

@@ -25,8 +25,8 @@ test('position controls: seek via slider, current label', async ({ page }) => {
   await page.request.post('/api/v2/job/range', {
     data: { from: range.from, to: range.to, step: '1s', speed: 1, window: '5s' },
   });
-  await expect(fromLabel).toContainText('from:');
-  await expect(toLabel).toContainText('to:');
+  await expect(fromLabel).toContainText('from (UTC):');
+  await expect(toLabel).toContainText('to (UTC):');
 
   // Бегунок доступен.
   await expect(timeline).toBeEnabled();

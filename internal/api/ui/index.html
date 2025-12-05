@@ -92,6 +92,8 @@
     .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
     .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 320px; margin: 0 auto; position: relative; overflow: hidden; }
     .chart-box.step { height: 220px; min-height: 160px; }
+    .chart-zoom-reset { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 12px; background: rgba(34, 211, 238, 0.2); border: 1px solid rgba(34, 211, 238, 0.5); border-radius: 4px; color: #22d3ee; cursor: pointer; z-index: 10; display: none; }
+    .chart-zoom-reset:hover { background: rgba(34, 211, 238, 0.3); }
     .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .chart-controls input { max-width: 320px; }
     .chart-meta { color: #94a3b8; font-size: 13px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -338,6 +340,7 @@
             <div class="chart-section-content" id="chartContentAnalog">
               <div class="chart-box" id="chartBox" style="height:420px;">
                 <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
+                <button id="chartZoomReset" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
               </div>
               <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
             </div>
@@ -350,6 +353,7 @@
             <div class="chart-section-content" id="chartContentDiscrete">
               <div class="chart-box step" id="chartBoxStep" style="height:220px;">
                 <canvas id="chartCanvasStep" style="width:100%; height:100%;"></canvas>
+                <button id="chartZoomResetStep" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
               </div>
               <div class="resize-handle chart-resize-handle" id="chartResizeHandleStep" title="Потяните, чтобы изменить высоту дискретного графика"></div>
             </div>
@@ -690,6 +694,8 @@
         sectionDiscrete: document.getElementById('chartSectionDiscrete'),
         contentAnalog: document.getElementById('chartContentAnalog'),
         contentDiscrete: document.getElementById('chartContentDiscrete'),
+        zoomReset: document.getElementById('chartZoomReset'),
+        zoomResetStep: document.getElementById('chartZoomResetStep'),
       },
       rangeBtn: document.getElementById('rangeBtn'),
       sensorsDialog: document.getElementById('sensorsDialog'),
@@ -816,6 +822,8 @@
       suggest: { items: [], active: -1, locked: false, lastQuery: '' },
       focused: null,
       pendingChartUpdate: false,
+      zoomActive: false,
+      zoomRange: { from: null, to: null },
     };
   const sensorIndex = {
       byName: new Map(),    // name -> {name,textname,iotype,configId}
@@ -1846,19 +1854,28 @@
     }
 
     function syncChartData() {
-      const hasRange = chartState.range.from && chartState.range.to;
+      // Определить активный диапазон: zoom или рабочий
+      let xMin, xMax;
+      if (chartState.zoomActive && chartState.zoomRange.from !== null) {
+        xMin = chartState.zoomRange.from;
+        xMax = chartState.zoomRange.to;
+      } else {
+        const hasRange = chartState.range.from && chartState.range.to;
+        xMin = hasRange ? chartState.range.from : undefined;
+        xMax = hasRange ? chartState.range.to : undefined;
+      }
       if (chartState.chart) {
         chartState.chart.data.labels = extractChartLabels();
         chartState.chart.data.datasets = buildChartDatasets();
-        chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
-        chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        chartState.chart.options.scales.x.min = xMin;
+        chartState.chart.options.scales.x.max = xMax;
         chartState.chart.update('none');
       }
       if (chartState.chartStep) {
         chartState.chartStep.data.labels = extractChartLabels();
         chartState.chartStep.data.datasets = buildStepDatasets();
-        chartState.chartStep.options.scales.x.min = hasRange ? chartState.range.from : undefined;
-        chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        chartState.chartStep.options.scales.x.min = xMin;
+        chartState.chartStep.options.scales.x.max = xMax;
         const tracks = Math.max(chartState.selected.filter(isDiscreteSensor).length, 1);
         chartState.chartStep.options.scales.y.min = 0;
         chartState.chartStep.options.scales.y.max = tracks * 2;
@@ -1954,6 +1971,22 @@
                   return `${ctx.dataset?.label || ''}: ${val}`.trim();
                 },
               },
+            },
+            zoom: {
+              zoom: {
+                wheel: { enabled: false },
+                pinch: { enabled: false },
+                drag: {
+                  enabled: true,
+                  backgroundColor: 'rgba(34, 211, 238, 0.15)',
+                  borderColor: 'rgba(34, 211, 238, 0.8)',
+                  borderWidth: 1,
+                },
+                mode: 'x',
+                onZoomComplete: handleZoomComplete,
+              },
+              pan: { enabled: false },
+              limits: { x: { min: 'original', max: 'original' } },
             },
           },
         },
@@ -2072,8 +2105,20 @@
               },
             },
             zoom: {
-              zoom: {wheel: {enabled: false}, pinch: {enabled: false}, mode: 'x'},
-              pan: {enabled: false},
+              zoom: {
+                wheel: { enabled: false },
+                pinch: { enabled: false },
+                drag: {
+                  enabled: true,
+                  backgroundColor: 'rgba(34, 211, 238, 0.15)',
+                  borderColor: 'rgba(34, 211, 238, 0.8)',
+                  borderWidth: 1,
+                },
+                mode: 'x',
+                onZoomComplete: handleZoomComplete,
+              },
+              pan: { enabled: false },
+              limits: { x: { min: 'original', max: 'original' } },
             },
           },
           interaction: {mode: 'nearest', intersect: false},
@@ -2111,7 +2156,43 @@
       return Array.from(labels).sort((a, b) => a - b);
     }
 
+    function handleZoomComplete({ chart }) {
+      const { min, max } = chart.scales.x;
+      chartState.zoomActive = true;
+      chartState.zoomRange = { from: min, to: max };
+      showZoomResetButton(true);
+      // Синхронизировать второй график
+      const other = chart === chartState.chart ? chartState.chartStep : chartState.chart;
+      if (other) {
+        other.options.scales.x.min = min;
+        other.options.scales.x.max = max;
+        other.update('none');
+      }
+    }
+
     function resetChartZoom() {
+      chartState.zoomActive = false;
+      chartState.zoomRange = { from: null, to: null };
+      showZoomResetButton(false);
+      // Восстановить диапазон воспроизведения
+      const hasRange = chartState.range.from && chartState.range.to;
+      if (chartState.chart) {
+        chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
+        chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        chartState.chart.update('none');
+      }
+      if (chartState.chartStep) {
+        chartState.chartStep.options.scales.x.min = hasRange ? chartState.range.from : undefined;
+        chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
+        chartState.chartStep.update('none');
+      }
+    }
+
+    function showZoomResetButton(show) {
+      const btn = document.getElementById('chartZoomReset');
+      const btnStep = document.getElementById('chartZoomResetStep');
+      if (btn) btn.style.display = show ? 'block' : 'none';
+      if (btnStep) btnStep.style.display = show ? 'block' : 'none';
     }
 
     function autoZoomY() {
@@ -2658,6 +2739,12 @@
       const prevTo = chartState.range.to;
       chartState.range = { from: fromMs, to: toMs };
       if (prevFrom !== fromMs || prevTo !== toMs) {
+        // Сбросить zoom при изменении рабочего диапазона
+        if (chartState.zoomActive) {
+          chartState.zoomActive = false;
+          chartState.zoomRange = { from: null, to: null };
+          showZoomResetButton(false);
+        }
         // Перебираем датасеты и удаляем точки за пределами нового диапазона.
         chartState.datasets.forEach(ds => {
           ds.data = ds.data.filter(p => p.x >= fromMs && p.x <= toMs);
@@ -3559,6 +3646,12 @@
           renderLegendTable();
           syncChartData();
         });
+      }
+      if (els.charts.zoomReset) {
+        els.charts.zoomReset.addEventListener('click', () => resetChartZoom());
+      }
+      if (els.charts.zoomResetStep) {
+        els.charts.zoomResetStep.addEventListener('click', () => resetChartZoom());
       }
     }
 

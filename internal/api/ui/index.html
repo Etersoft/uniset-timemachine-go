@@ -1485,16 +1485,40 @@
 
     const chartColors = ['#22d3ee', '#34d399', '#f59e0b', '#f472b6', '#a78bfa', '#f87171', '#4ade80', '#60a5fa'];
 
+    // Convert HSL to HEX (h: 0-360, s: 0-100, l: 0-100)
+    function hslToHex(h, s, l) {
+      s /= 100;
+      l /= 100;
+      const a = s * Math.min(l, 1 - l);
+      const f = n => {
+        const k = (n + h / 30) % 12;
+        const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+        return Math.round(255 * color).toString(16).padStart(2, '0');
+      };
+      return `#${f(0)}${f(8)}${f(4)}`;
+    }
+
+    // Simple string hash for color generation
+    function simpleHash(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) {
+        hash = ((hash << 5) - hash) + str.charCodeAt(i);
+        hash = hash & hash; // Convert to 32bit integer
+      }
+      return Math.abs(hash);
+    }
+
     function pickChartColor(id, usedColors, idxHint) {
       const used = usedColors || new Set();
       for (let i = 0; i < chartColors.length; i++) {
         const color = chartColors[(idxHint + i) % chartColors.length];
         if (!used.has(color.toLowerCase())) return color;
       }
-      const hue = (Number(id) * 37 + (idxHint || 0) * 53) % 360;
-      const color = `hsl(${hue}, 68%, 58%)`;
+      const idHash = typeof id === 'string' ? simpleHash(id) : Number(id) || 0;
+      const hue = (idHash * 37 + (idxHint || 0) * 53) % 360;
+      const color = hslToHex(hue, 68, 58);
       if (!used.has(color.toLowerCase())) return color;
-      const alt = `hsl(${(hue + 27) % 360}, 68%, 58%)`;
+      const alt = hslToHex((hue + 27) % 360, 68, 58);
       return alt;
     }
 
@@ -1787,7 +1811,7 @@
         label: ds.label,
         data: ds.data,
         borderColor: ds.color || '#22d3ee',
-        backgroundColor: els.charts.fill?.checked ? hexToRGBA(ds.color || '#22d3ee', 0.15) : ds.color || '#22d3ee',
+        backgroundColor: els.charts.fill?.checked ? hexToRGBA(ds.color || '#22d3ee', 0.05) : ds.color || '#22d3ee',
         tension: chartState.smooth ? 0.25 : 0,
         spanGaps: true,
         pointRadius: 0,

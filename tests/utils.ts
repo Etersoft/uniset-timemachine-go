@@ -58,6 +58,11 @@ export async function ensureSessionOnly(page: Page, token?: string): Promise<str
   return ensureSession(page, token);
 }
 
+// Сбрасывает job (остановка воспроизведения, очистка состояния)
+export async function resetJob(page: Page): Promise<void> {
+  await page.request.post('/api/v2/job/reset').catch(() => {});
+}
+
 // Сбрасывает все активные сессии на сервере для чистоты теста
 export async function clearAllSessions(page: Page): Promise<void> {
   // Вызываем API сброса через POST /api/v2/session/clear-all (если есть)

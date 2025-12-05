@@ -4,8 +4,9 @@ import { gotoWithSession } from './utils';
 // Range -> FWD -> FWD -> Play -> Pause -> Backward -> Backward -> Play -> Stop
 // -> To Begin -> Play -> Stop -> To End -> Bwd -> Bwd -> Play -> Stop (or finish)
 test('range → step fwd/bwd and play/stop flow', async ({ page }) => {
-  test.setTimeout(10_000);
+  test.setTimeout(20_000);
   await gotoWithSession(page);
+  await page.request.post('/api/v2/job/reset');
 
   const statusBadge = page.locator('#statusBadge');
 

@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { gotoWithSession, claimControl } from './utils';
 
 test('front-end issues HTTP requests on load and start/stop', async ({ page }) => {
+  test.setTimeout(20_000);
   await gotoWithSession(page);
   // Подстрахуемся, что управление у нас (если предыдущий тест оставил контроллер).
   await claimControl(page, 10, 700);

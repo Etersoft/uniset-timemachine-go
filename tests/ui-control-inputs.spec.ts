@@ -71,11 +71,9 @@ test('step / speed / cache / save-to-sm controls are applied on start', async ({
   }
 
   await playBtn.click();
-  await expect(statusBadge).not.toHaveText(/failed/i, { timeout: 8_000 });
-  await page.waitForTimeout(300);
-
-  // Ждём, пока /job отдаст актуальные параметры.
-  await page.waitForTimeout(400);
+  // Ждём, пока статус станет running (не failed и не idle)
+  await expect(statusBadge).toHaveText(/running|pending|paused/i, { timeout: 8_000 });
+  await page.waitForTimeout(500);
   const afterJob = await page.request.get('/api/v2/job').then(r => r.json());
   const params = afterJob.params || afterJob.Params || {};
 

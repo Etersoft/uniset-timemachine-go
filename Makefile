@@ -145,7 +145,7 @@ check-sm:
 clean-bench:
 	@rm -f sqlite-large.db config/generated-sensors.xml
 
-RUN_FLAGS ?= --http-addr :9090 --db sqlite://test.db --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:00:10Z --step 1s --output stdout
+RUN_FLAGS ?= --http-addr :9090 --config-yaml config/config.yaml
 
 run:
 	@echo "Running timemachine with $(RUN_FLAGS)"

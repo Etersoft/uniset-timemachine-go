@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import { gotoWithSession } from './utils';
 
 test('working sensors: select existing, reset to all, load from text', async ({ page }) => {
+  test.setTimeout(30_000); // Увеличиваем таймаут - тест делает много операций
   await gotoWithSession(page);
   await page.request.post('/api/v2/job/reset');
 

@@ -92,7 +92,7 @@
     .chart-wrap { background: #0f172a; border: 1px solid #1f2937; border-radius: 14px; padding: 12px; box-shadow: 0 12px 36px rgba(0,0,0,0.4); min-height: 420px; }
     .chart-box { width: 100%; max-width: 1100px; min-width: 720px; height: 420px; min-height: 320px; margin: 0 auto; position: relative; overflow: hidden; }
     .chart-box.step { height: 220px; min-height: 160px; }
-    .chart-zoom-reset { position: absolute; top: 8px; right: 8px; padding: 4px 10px; font-size: 12px; background: rgba(34, 211, 238, 0.2); border: 1px solid rgba(34, 211, 238, 0.5); border-radius: 4px; color: #22d3ee; cursor: pointer; z-index: 10; display: none; }
+    .chart-zoom-reset { margin-left: auto; padding: 2px 8px; font-size: 11px; background: rgba(34, 211, 238, 0.2); border: 1px solid rgba(34, 211, 238, 0.5); border-radius: 4px; color: #22d3ee; cursor: pointer; display: none; }
     .chart-zoom-reset:hover { background: rgba(34, 211, 238, 0.3); }
     .chart-controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
     .chart-controls input { max-width: 320px; }
@@ -336,11 +336,11 @@
             <div class="chart-section-header" data-section="analog">
               <button class="chart-collapse-btn" type="button" title="Свернуть/развернуть">&#9660;</button>
               <span class="chart-section-title">Аналоговые значения</span>
+              <button id="chartZoomReset" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
             </div>
             <div class="chart-section-content" id="chartContentAnalog">
               <div class="chart-box" id="chartBox" style="height:420px;">
                 <canvas id="chartCanvas" style="width:100%; height:100%;"></canvas>
-                <button id="chartZoomReset" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
               </div>
               <div class="resize-handle chart-resize-handle" id="chartResizeHandle" title="Потяните, чтобы изменить высоту графика"></div>
             </div>
@@ -349,11 +349,11 @@
             <div class="chart-section-header" data-section="discrete">
               <button class="chart-collapse-btn" type="button" title="Свернуть/развернуть">&#9660;</button>
               <span class="chart-section-title">Дискретные значения</span>
+              <button id="chartZoomResetStep" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
             </div>
             <div class="chart-section-content" id="chartContentDiscrete">
               <div class="chart-box step" id="chartBoxStep" style="height:220px;">
                 <canvas id="chartCanvasStep" style="width:100%; height:100%;"></canvas>
-                <button id="chartZoomResetStep" class="chart-zoom-reset" title="Вернуться к полному диапазону воспроизведения">Рабочий диапазон</button>
               </div>
               <div class="resize-handle chart-resize-handle" id="chartResizeHandleStep" title="Потяните, чтобы изменить высоту дискретного графика"></div>
             </div>
@@ -2174,14 +2174,22 @@
       chartState.zoomActive = false;
       chartState.zoomRange = { from: null, to: null };
       showZoomResetButton(false);
-      // Восстановить диапазон воспроизведения
+      // Сбросить zoom плагина и восстановить диапазон воспроизведения
       const hasRange = chartState.range.from && chartState.range.to;
       if (chartState.chart) {
+        // Сначала сбросим zoom плагина
+        if (typeof chartState.chart.resetZoom === 'function') {
+          chartState.chart.resetZoom();
+        }
+        // Затем установим правильный диапазон
         chartState.chart.options.scales.x.min = hasRange ? chartState.range.from : undefined;
         chartState.chart.options.scales.x.max = hasRange ? chartState.range.to : undefined;
         chartState.chart.update('none');
       }
       if (chartState.chartStep) {
+        if (typeof chartState.chartStep.resetZoom === 'function') {
+          chartState.chartStep.resetZoom();
+        }
         chartState.chartStep.options.scales.x.min = hasRange ? chartState.range.from : undefined;
         chartState.chartStep.options.scales.x.max = hasRange ? chartState.range.to : undefined;
         chartState.chartStep.update('none');
@@ -3648,10 +3656,16 @@
         });
       }
       if (els.charts.zoomReset) {
-        els.charts.zoomReset.addEventListener('click', () => resetChartZoom());
+        els.charts.zoomReset.addEventListener('click', (e) => {
+          e.stopPropagation();
+          resetChartZoom();
+        });
       }
       if (els.charts.zoomResetStep) {
-        els.charts.zoomResetStep.addEventListener('click', () => resetChartZoom());
+        els.charts.zoomResetStep.addEventListener('click', (e) => {
+          e.stopPropagation();
+          resetChartZoom();
+        });
       }
     }
 

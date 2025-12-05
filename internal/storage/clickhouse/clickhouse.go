@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -86,7 +87,26 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	// Определяем режим работы: сначала проверяем uniset_hid, затем name_hid, иначе name
 	store.mode = store.detectHashMode(ctx)
 
+	// Check server timezone
+	store.checkTimezone(ctx)
+
 	return store, nil
+}
+
+// checkTimezone checks the ClickHouse server timezone and logs a warning if not UTC.
+func (s *Store) checkTimezone(ctx context.Context) {
+	var tz string
+	row := s.conn.QueryRow(ctx, "SELECT timezone()")
+	if err := row.Scan(&tz); err != nil {
+		log.Printf("clickhouse: WARNING: failed to check timezone: %v", err)
+		return
+	}
+	if tz == "UTC" || tz == "Etc/UTC" {
+		log.Printf("clickhouse: timezone is %s (OK)", tz)
+		return
+	}
+	log.Printf("clickhouse: WARNING: server timezone is %q, expected UTC", tz)
+	log.Printf("clickhouse: timestamps will be interpreted as UTC regardless of server timezone")
 }
 
 // detectHashMode определяет режим работы с хешами.

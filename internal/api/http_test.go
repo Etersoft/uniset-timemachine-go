@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -686,4 +687,66 @@ func waitStatus(t *testing.T, mgr *Manager, want []string, timeout time.Duration
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("status did not reach %v within %s, last=%s", want, timeout, mgr.Status().Status)
+}
+
+// TestTimezoneHandling verifies that RFC3339 timestamps are correctly parsed and formatted in UTC.
+func TestTimezoneHandling(t *testing.T) {
+	t.Run("RFC3339 with offset parses to UTC", func(t *testing.T) {
+		// Input with explicit timezone offset (+03:00)
+		input := "2024-06-01T12:00:00+03:00"
+		parsed, err := time.Parse(time.RFC3339, input)
+		if err != nil {
+			t.Fatalf("failed to parse RFC3339: %v", err)
+		}
+
+		// Expected UTC time (12:00 +03:00 = 09:00 UTC)
+		expected := time.Date(2024, 6, 1, 9, 0, 0, 0, time.UTC)
+		if !parsed.UTC().Equal(expected) {
+			t.Errorf("expected %v, got %v", expected, parsed.UTC())
+		}
+	})
+
+	t.Run("RFC3339 with Z parses to UTC", func(t *testing.T) {
+		input := "2024-06-01T12:00:00Z"
+		parsed, err := time.Parse(time.RFC3339, input)
+		if err != nil {
+			t.Fatalf("failed to parse RFC3339: %v", err)
+		}
+
+		expected := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+		if !parsed.UTC().Equal(expected) {
+			t.Errorf("expected %v, got %v", expected, parsed.UTC())
+		}
+	})
+
+	t.Run("UTC formatting always produces Z suffix", func(t *testing.T) {
+		// Create time with explicit non-UTC location
+		loc := time.FixedZone("TEST", 3*60*60) // +03:00
+		localTime := time.Date(2024, 6, 1, 15, 0, 0, 0, loc)
+
+		// Format as UTC should produce Z suffix
+		formatted := localTime.UTC().Format(time.RFC3339)
+		if !strings.HasSuffix(formatted, "Z") {
+			t.Errorf("expected Z suffix, got %s", formatted)
+		}
+
+		// Should be 12:00 UTC (15:00 - 3 hours)
+		if formatted != "2024-06-01T12:00:00Z" {
+			t.Errorf("expected 2024-06-01T12:00:00Z, got %s", formatted)
+		}
+	})
+
+	t.Run("time.Time JSON marshaling uses RFC3339", func(t *testing.T) {
+		ts := time.Date(2024, 6, 1, 12, 0, 0, 0, time.UTC)
+		data, err := json.Marshal(ts)
+		if err != nil {
+			t.Fatalf("failed to marshal: %v", err)
+		}
+
+		// JSON marshaling should produce RFC3339 format with Z
+		expected := `"2024-06-01T12:00:00Z"`
+		if string(data) != expected {
+			t.Errorf("expected %s, got %s", expected, string(data))
+		}
+	})
 }

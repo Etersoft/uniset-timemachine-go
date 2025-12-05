@@ -37,11 +37,11 @@ test('range dialog elements and apply flow', async ({ page }) => {
   await expect(dlg).toBeHidden();
 
   // Проверяем, что скрытые поля и метка обновились
+  // Input is now interpreted as UTC directly (not local time)
   const appliedFrom = await page.locator('#from').inputValue();
   const appliedTo = await page.locator('#to').inputValue();
-  const expectedFrom = new Date(customFrom).toISOString().replace(/\.\d{3}Z$/, 'Z');
-  const expectedTo = new Date(customTo).toISOString().replace(/\.\d{3}Z$/, 'Z');
-  expect(appliedFrom).toBe(expectedFrom);
-  expect(appliedTo).toBe(expectedTo);
+  // customFrom = '2024-01-01T00:00' should become '2024-01-01T00:00:00Z' (UTC, not local)
+  expect(appliedFrom).toBe('2024-01-01T00:00:00Z');
+  expect(appliedTo).toBe('2024-01-01T00:05:00Z');
   await expect(labelValue).not.toHaveText(/не задан/i);
 });

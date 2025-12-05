@@ -241,9 +241,9 @@
         </div>
       </div>
       <div class="timeline">
-        <div class="timeline-label" id="fromLabel">from: -</div>
+        <div class="timeline-label" id="fromLabel">from (UTC): -</div>
         <input id="timeline" type="range" min="0" max="1000" value="0" disabled>
-        <div class="timeline-label" id="toLabel">to: -</div>
+        <div class="timeline-label" id="toLabel">to (UTC): -</div>
       </div>
       <div class="muted" id="errorNote" style="text-align:center; margin-top:6px;"></div>
     </div>
@@ -389,8 +389,8 @@
 
   <dialog id="datetimeDialog">
     <form method="dialog">
-      <h3 style="margin:0 0 6px;">Выбор даты/времени</h3>
-      <p class="muted" style="margin:0 0 10px;">Локальное время → сохраняем как RFC3339 с Z.</p>
+      <h3 style="margin:0 0 6px;">Выбор даты/времени (UTC)</h3>
+      <p class="muted" style="margin:0 0 10px;">Время указывается в UTC.</p>
       <input id="dtInput" type="datetime-local" step="1" style="width:100%; padding:10px 12px; border-radius:10px; border:1px solid #233143; background:#0b1324; color:#e2e8f0;">
       <div class="dlg-actions">
         <button type="submit" value="cancel" class="ghost">Отмена</button>
@@ -426,11 +426,11 @@
       </div>
       <div class="row wrap" style="gap:12px;">
         <div style="flex:1; min-width:260px;">
-          <label for="rangeDialogFrom">From</label>
+          <label for="rangeDialogFrom">From (UTC)</label>
           <input id="rangeDialogFrom" type="datetime-local" step="1">
         </div>
         <div style="flex:1; min-width:260px;">
-          <label for="rangeDialogTo">To</label>
+          <label for="rangeDialogTo">To (UTC)</label>
           <input id="rangeDialogTo" type="datetime-local" step="1">
         </div>
       </div>
@@ -2758,13 +2758,13 @@
       if (!range.valid) {
         slider.disabled = true;
         slider.value = 0;
-        els.fromLabel.textContent = 'from: -';
-        els.toLabel.textContent = 'to: -';
+        els.fromLabel.textContent = 'from (UTC): -';
+        els.toLabel.textContent = 'to (UTC): -';
         els.currentLabel.textContent = '-';
         return;
       }
-      els.fromLabel.textContent = `from: ${range.from.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
-      els.toLabel.textContent = `to: ${range.to.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+      els.fromLabel.textContent = `from (UTC): ${range.from.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
+      els.toLabel.textContent = `to (UTC): ${range.to.toISOString().replace(/\.\d{3}Z$/, 'Z')}`;
       slider.disabled = false;
       const rangeMs = range.to - range.from;
       let pos = 0;
@@ -3235,15 +3235,15 @@
         const target = els.dialog.dataset.target;
         const val = els.dialogInput.value;
         if (!target || !val) return;
-        const iso = localInputToISO(val);
+        const iso = utcInputToISO(val);
         const input = document.getElementById(target);
         if (input && iso) input.value = iso;
       });
       if (els.rangeDialog) {
         els.rangeDialog.addEventListener('close', () => {
           if (els.rangeDialog.returnValue !== 'ok') return;
-          const from = localInputToISO(els.rangeFrom?.value || '');
-          const to = localInputToISO(els.rangeTo?.value || '');
+          const from = utcInputToISO(els.rangeFrom?.value || '');
+          const to = utcInputToISO(els.rangeTo?.value || '');
           if (from) els.inputs.from.value = from;
           if (to) els.inputs.to.value = to;
           state.previewTs = null;
@@ -3632,14 +3632,14 @@
       const input = document.getElementById(targetId);
       const current = input ? input.value.trim() : '';
       els.dialog.dataset.target = targetId;
-      els.dialogInput.value = isoToLocalInput(current) || '';
+      els.dialogInput.value = isoToUTCInput(current) || '';
       els.dialog.showModal();
     }
 
     function openRangeDialog() {
       if (!els.rangeDialog || !els.rangeFrom || !els.rangeTo) return;
-      els.rangeFrom.value = isoToLocalInput(els.inputs.from.value.trim()) || '';
-      els.rangeTo.value = isoToLocalInput(els.inputs.to.value.trim()) || '';
+      els.rangeFrom.value = isoToUTCInput(els.inputs.from.value.trim()) || '';
+      els.rangeTo.value = isoToUTCInput(els.inputs.to.value.trim()) || '';
       els.rangeDialog.showModal();
     }
 
@@ -3647,8 +3647,8 @@
       if (!Number.isFinite(mins) || mins <= 0) return;
       const now = new Date();
       const from = new Date(now.getTime() - mins * 60 * 1000);
-      if (els.rangeFrom) els.rangeFrom.value = isoToLocalInput(toRFC3339(from));
-      if (els.rangeTo) els.rangeTo.value = isoToLocalInput(toRFC3339(now));
+      if (els.rangeFrom) els.rangeFrom.value = isoToUTCInput(toRFC3339(from));
+      if (els.rangeTo) els.rangeTo.value = isoToUTCInput(toRFC3339(now));
     }
 
     function openPreciseTimeDialog() {
@@ -3698,16 +3698,19 @@
       logUI(`Открыт диалог точной позиции для ${dateStr} ${timeStr}.${millis}`);
     }
 
-    function isoToLocalInput(iso) {
+    // Converts ISO/RFC3339 string to datetime-local input format (UTC components)
+    function isoToUTCInput(iso) {
       const d = parseISO(iso);
       if (!d) return '';
       const pad = (n) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
     }
 
-    function localInputToISO(val) {
+    // Converts datetime-local input value to RFC3339 (interpreting input as UTC)
+    function utcInputToISO(val) {
       if (!val) return '';
-      const d = new Date(val);
+      // Append 'Z' to interpret input as UTC, not local time
+      const d = new Date(val + 'Z');
       if (Number.isNaN(d.getTime())) return '';
       return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
     }
@@ -3946,8 +3949,8 @@
           return;
         }
         if (intoDialog && els.rangeFrom && els.rangeTo) {
-          els.rangeFrom.value = isoToLocalInput(data.from);
-          els.rangeTo.value = isoToLocalInput(data.to);
+          els.rangeFrom.value = isoToUTCInput(data.from);
+          els.rangeTo.value = isoToUTCInput(data.to);
         } else {
           els.inputs.from.value = data.from;
           els.inputs.to.value = data.to;

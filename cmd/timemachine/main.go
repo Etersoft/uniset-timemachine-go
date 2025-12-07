@@ -17,6 +17,7 @@ import (
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
 	"github.com/pv/uniset-timemachine-go/internal/storage"
 	"github.com/pv/uniset-timemachine-go/internal/storage/clickhouse"
+	"github.com/pv/uniset-timemachine-go/internal/storage/influxdb"
 	"github.com/pv/uniset-timemachine-go/internal/storage/memstore"
 	"github.com/pv/uniset-timemachine-go/internal/storage/postgres"
 	sqliteStore "github.com/pv/uniset-timemachine-go/internal/storage/sqlite"
@@ -274,6 +275,17 @@ func initStorage(ctx context.Context, opts options, cfg *config.Config, sensors 
 			log.Fatalf("clickhouse storage error: %v", err)
 		}
 		return chStore, chStore.Close
+	}
+
+	if influxdb.IsSource(opts.dbURL) {
+		influxStore, err := influxdb.New(ctx, influxdb.Config{
+			DSN:      opts.dbURL,
+			Resolver: configResolver{cfg: cfg},
+		})
+		if err != nil {
+			log.Fatalf("influxdb storage error: %v", err)
+		}
+		return influxStore, influxStore.Close
 	}
 
 	log.Fatalf("unsupported --db value: %s", opts.dbURL)

@@ -36,6 +36,24 @@ services:
       timeout: 3s
       retries: 5
 
+  influxdb:
+    image: influxdb:1.8
+    container_name: tm-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=uniset
+      - INFLUXDB_HTTP_AUTH_ENABLED=false
+    volumes:
+      - influxdata:/var/lib/influxdb
+      - ./scripts/influxdb-init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   # Playwright tests use timemachine-test with memstore (no DB dependency)
   playwright:
     image: mcr.microsoft.com/playwright:v1.39.0-jammy
@@ -114,6 +132,7 @@ services:
 volumes:
   pgdata: {}
   chdata: {}
+  influxdata: {}
   playwright-browsers: {}
   playwright-node:
     driver: local

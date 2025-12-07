@@ -1,29 +1,34 @@
 TM_POSTGRES_DSN ?= postgres://admin:123@localhost:5432/uniset?sslmode=disable
 TM_CLICKHOUSE_DSN ?= clickhouse://localhost:9000/default
+TM_INFLUXDB_URL ?= http://localhost:8086
+TM_INFLUXDB_DB ?= uniset
 CONFIG_YAML ?= config/config.yaml
 SM_CONFIG_YAML ?= $(CONFIG_YAML)
 
-.PHONY: help pg-up pg-down pg-tests pg-gen-data ch-up ch-down ch-tests ch-gen-data gen-sensors gen-db bench check-sm clean-bench run
+.PHONY: help pg-up pg-down pg-tests pg-gen-data ch-up ch-down ch-tests ch-gen-data influx-up influx-down influx-gen-data gen-sensors gen-db bench check-sm clean-bench run
 
 help:
 	@echo "Available targets:"
-	@echo "  help        - this message"
-	@echo "  pg-up       - start Postgres docker and seed it"
-	@echo "  pg-down     - stop Postgres docker"
-	@echo "  pg-tests    - run PostgreSQL integration tests (starts PG if needed)"
-	@echo "  pg-gen-data - generate realistic PG data (see GEN_PG_*)"
-	@echo "  ch-up       - start ClickHouse docker and create schema"
-	@echo "  ch-down     - stop ClickHouse docker"
-	@echo "  ch-tests    - run ClickHouse integration tests (starts CH if needed)"
-	@echo "  ch-gen-data - generate realistic CH data (see GEN_CH_*)"
-	@echo "  gen-sensors - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
-	@echo "  gen-db      - generate SQLite dataset (see GEN_DB_*)"
+	@echo "  help           - this message"
+	@echo "  pg-up          - start Postgres docker and seed it"
+	@echo "  pg-down        - stop Postgres docker"
+	@echo "  pg-tests       - run PostgreSQL integration tests (starts PG if needed)"
+	@echo "  pg-gen-data    - generate realistic PG data (see GEN_PG_*)"
+	@echo "  ch-up          - start ClickHouse docker and create schema"
+	@echo "  ch-down        - stop ClickHouse docker"
+	@echo "  ch-tests       - run ClickHouse integration tests (starts CH if needed)"
+	@echo "  ch-gen-data    - generate realistic CH data (see GEN_CH_*)"
+	@echo "  influx-up      - start InfluxDB docker"
+	@echo "  influx-down    - stop InfluxDB docker"
+	@echo "  influx-gen-data - generate realistic InfluxDB data (see GEN_INFLUX_*)"
+	@echo "  gen-sensors    - generate config/generated-sensors.xml (see GEN_SENSORS_*)"
+	@echo "  gen-db         - generate SQLite dataset (see GEN_DB_*)"
 	@echo "  gen-config-example - write config/config-example.yaml"
-	@echo "  coverage    - run go test with coverage profile"
-	@echo "  bench       - run timemachine bench using $(CONFIG_YAML) (override via BENCH_FLAGS)"
-	@echo "  check-sm    - send test set/get to SharedMemory"
-	@echo "  clean-bench - remove generated SQLite/ClickHouse artifacts"
-	@echo "  run         - run timemachine in HTTP control mode (see RUN_FLAGS)"
+	@echo "  coverage       - run go test with coverage profile"
+	@echo "  bench          - run timemachine bench using $(CONFIG_YAML) (override via BENCH_FLAGS)"
+	@echo "  check-sm       - send test set/get to SharedMemory"
+	@echo "  clean-bench    - remove generated SQLite/ClickHouse artifacts"
+	@echo "  run            - run timemachine in HTTP control mode (see RUN_FLAGS)"
 
 pg-up:
 	@docker compose up -d postgres
@@ -96,6 +101,33 @@ ch-gen-data:
 		--duration $(GEN_CH_DURATION) \
 		--truncate \
 		$(if $(GEN_CH_SQL_OUTPUT),--sql-output $(GEN_CH_SQL_OUTPUT),)
+
+influx-up:
+	@docker compose up -d influxdb
+	@echo "Waiting for InfluxDB..."
+	@sleep 3
+	@echo "InfluxDB ready at $(TM_INFLUXDB_URL)"
+
+influx-down:
+	@docker compose rm -sf influxdb
+
+# InfluxDB data generation
+GEN_INFLUX_SENSORS ?= 0
+GEN_INFLUX_DURATION ?= 10m
+GEN_INFLUX_SELECTOR ?= ALL
+GEN_INFLUX_LP_OUTPUT ?=
+
+influx-gen-data:
+	@echo "Generating InfluxDB data..."
+	@go run ./cmd/gen-influxdb-data \
+		--url $(TM_INFLUXDB_URL) \
+		--db $(TM_INFLUXDB_DB) \
+		--confile config/test.xml \
+		--selector $(GEN_INFLUX_SELECTOR) \
+		$(if $(filter-out 0,$(GEN_INFLUX_SENSORS)),--sensors $(GEN_INFLUX_SENSORS),) \
+		--duration $(GEN_INFLUX_DURATION) \
+		--drop \
+		$(if $(GEN_INFLUX_LP_OUTPUT),--lp-output $(GEN_INFLUX_LP_OUTPUT),)
 
 GEN_SENSORS_OUTPUT ?= config/generated-sensors.xml
 GEN_SENSORS_START ?= 10001

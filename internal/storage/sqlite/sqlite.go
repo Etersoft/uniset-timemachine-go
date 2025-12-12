@@ -40,6 +40,40 @@ type Store struct {
 	registry   *config.SensorRegistry
 }
 
+// RangeWithUnknown реализует UnknownAwareStorage: дополнительно считает неизвестные датчики в окне.
+func (s *Store) RangeWithUnknown(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, int64, error) {
+	minTs, maxTs, count, err := s.Range(ctx, sensors, from, to)
+	if err != nil {
+		return minTs, maxTs, count, 0, err
+	}
+	// Если нет реестра, считаем, что неизвестных нет (legacy режим).
+	if s.registry == nil {
+		return minTs, maxTs, count, 0, nil
+	}
+	// Считаем общее число уникальных sensor_id в окне без фильтра и сравниваем с числом известных
+	// (по рабочему списку). Если в истории есть sensor_id, отсутствующие в конфиге, они попадут
+	// в unknown (all - known).
+	args := []interface{}{}
+	var where string
+	if !from.IsZero() {
+		args = append(args, from.Format(time.RFC3339Nano))
+		where += " AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) >= strftime('%s', ?) * 1000000"
+	}
+	if !to.IsZero() {
+		args = append(args, to.Format(time.RFC3339Nano))
+		where += " AND (strftime('%s', timestamp) * 1000000 + COALESCE(time_usec, 0)) <= strftime('%s', ?) * 1000000"
+	}
+	var total int64
+	if err := s.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(DISTINCT sensor_id) FROM main_history WHERE 1=1 %s`, where), args...).Scan(&total); err != nil {
+		return minTs, maxTs, count, 0, fmt.Errorf("sqlite: unknown sensors count: %w", err)
+	}
+	unknown := total - count
+	if unknown < 0 {
+		unknown = 0
+	}
+	return minTs, maxTs, count, unknown, nil
+}
+
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.Source == "" {
 		return nil, fmt.Errorf("sqlite: database path is empty")

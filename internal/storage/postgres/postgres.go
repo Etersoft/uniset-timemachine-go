@@ -27,6 +27,83 @@ type Store struct {
 	registry *config.SensorRegistry
 }
 
+// RangeWithUnknown реализует UnknownAwareStorage: считает количество датчиков вне конфигурации
+// в выбранном окне [from,to]. Unknown вычисляется как (все distinct sensor_id в окне) - (известные).
+// Если словаря нет, считаем unknown=0.
+func (s *Store) RangeWithUnknown(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, int64, error) {
+	minTs, maxTs, _, err := s.Range(ctx, sensors, from, to)
+	if err != nil {
+		return minTs, maxTs, 0, 0, err
+	}
+
+	// Конвертируем рабочий список в configID для подсчёта известных.
+	configIDs, err := s.hashToConfigIDs(sensors)
+	if err != nil {
+		return minTs, maxTs, 0, 0, err
+	}
+
+	whereKnown := []string{"sensor_id = ANY($1)"}
+	argsKnown := []any{sensorsAsArray(configIDs)}
+	argPos := 2
+	if !from.IsZero() {
+		whereKnown = append(whereKnown,
+			fmt.Sprintf("(date > $%d::date OR (date = $%d::date AND (time > $%d::time OR (time = $%d::time AND time_usec >= $%d))))",
+				argPos, argPos, argPos+1, argPos+1, argPos+2))
+		argsKnown = append(argsKnown, from.Format("2006-01-02"), from.Format("15:04:05"), from.Nanosecond()/1000)
+		argPos += 3
+	}
+	if !to.IsZero() {
+		whereKnown = append(whereKnown,
+			fmt.Sprintf("(date < $%d::date OR (date = $%d::date AND (time < $%d::time OR (time = $%d::time AND time_usec <= $%d))))",
+				argPos, argPos, argPos+1, argPos+1, argPos+2))
+		argsKnown = append(argsKnown, to.Format("2006-01-02"), to.Format("15:04:05"), to.Nanosecond()/1000)
+		argPos += 3
+	}
+	queryKnown := "SELECT COUNT(DISTINCT sensor_id) FROM main_history WHERE " + strings.Join(whereKnown, " AND ")
+	var known int64
+	if err := s.pool.QueryRow(ctx, queryKnown, argsKnown...).Scan(&known); err != nil {
+		return minTs, maxTs, 0, 0, fmt.Errorf("postgres: count known sensors: %w", err)
+	}
+
+	// Unknown считаем только если есть словарь конфигурации.
+	if s.registry == nil {
+		return minTs, maxTs, known, 0, nil
+	}
+
+	// Считаем все distinct sensor_id в окне без фильтра по рабочему списку.
+	whereAll := make([]string, 0, 2)
+	argsAll := []any{}
+	argPosAll := 1
+	if !from.IsZero() {
+		whereAll = append(whereAll,
+			fmt.Sprintf("(date > $%d::date OR (date = $%d::date AND (time > $%d::time OR (time = $%d::time AND time_usec >= $%d))))",
+				argPosAll, argPosAll, argPosAll+1, argPosAll+1, argPosAll+2))
+		argsAll = append(argsAll, from.Format("2006-01-02"), from.Format("15:04:05"), from.Nanosecond()/1000)
+		argPosAll += 3
+	}
+	if !to.IsZero() {
+		whereAll = append(whereAll,
+			fmt.Sprintf("(date < $%d::date OR (date = $%d::date AND (time < $%d::time OR (time = $%d::time AND time_usec <= $%d))))",
+				argPosAll, argPosAll, argPosAll+1, argPosAll+1, argPosAll+2))
+		argsAll = append(argsAll, to.Format("2006-01-02"), to.Format("15:04:05"), to.Nanosecond()/1000)
+		argPosAll += 3
+	}
+	queryAll := "SELECT COUNT(DISTINCT sensor_id) FROM main_history"
+	if len(whereAll) > 0 {
+		queryAll += " WHERE " + strings.Join(whereAll, " AND ")
+	}
+
+	var totalDistinct int64
+	if err := s.pool.QueryRow(ctx, queryAll, argsAll...).Scan(&totalDistinct); err != nil {
+		return minTs, maxTs, known, 0, fmt.Errorf("postgres: count distinct sensors: %w", err)
+	}
+	unknown := totalDistinct - known
+	if unknown < 0 {
+		unknown = 0
+	}
+	return minTs, maxTs, known, unknown, nil
+}
+
 func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.ConnString == "" {
 		return nil, fmt.Errorf("postgres: connection string is empty")

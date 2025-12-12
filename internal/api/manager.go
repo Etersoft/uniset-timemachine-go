@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 	"github.com/pv/uniset-timemachine-go/internal/sharedmem"
+	"github.com/pv/uniset-timemachine-go/internal/storage"
 	"github.com/pv/uniset-timemachine-go/pkg/config"
-	"sort"
 )
 
 var (
@@ -758,9 +759,26 @@ func (m *Manager) stepPendingLocked(forward bool) bool {
 
 // Range возвращает минимальный/максимальный timestamp для текущего списка датчиков.
 func (m *Manager) Range(ctx context.Context) (time.Time, time.Time, int64, error) {
+	min, max, count, _, err := m.RangeWithUnknown(ctx)
+	return min, max, count, err
+}
+
+// RangeWithUnknown возвращает диапазон, количество известных датчиков и число неизвестных
+// (датчиков, которых нет в конфиге, но они есть в окне истории).
+// Unknown будет 0, если хранилище не поддерживает UnknownAwareStorage.
+func (m *Manager) RangeWithUnknown(ctx context.Context) (time.Time, time.Time, int64, int64, error) {
 	// Доступный диапазон считаем по всему объёму истории, без учёта текущего pending-диапазона,
 	// чтобы кнопка «установить доступный диапазон» всегда возвращала реальные границы данных.
-	return m.service.Storage.Range(ctx, m.sensors, time.Time{}, time.Time{})
+	return m.RangeWithUnknownBounds(ctx, time.Time{}, time.Time{})
+}
+
+// RangeWithUnknownBounds считает unknown в указанном окне [from,to]. Если не поддерживается — unknown=0.
+func (m *Manager) RangeWithUnknownBounds(ctx context.Context, from, to time.Time) (time.Time, time.Time, int64, int64, error) {
+	if ua, ok := m.service.Storage.(storage.UnknownAwareStorage); ok {
+		return ua.RangeWithUnknown(ctx, m.sensors, from, to)
+	}
+	min, max, count, err := m.service.Storage.Range(ctx, m.sensors, from, to)
+	return min, max, count, 0, err
 }
 
 func (m *Manager) SensorsCount(ctx context.Context, from, to time.Time) (int64, error) {

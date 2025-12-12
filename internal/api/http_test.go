@@ -50,6 +50,37 @@ func (c *apiTestClient) Send(_ context.Context, payload sharedmem.StepPayload) e
 	return nil
 }
 
+// mockUnknownStore реализует Storage + UnknownAwareStorage с заданным unknownCount.
+type mockUnknownStore struct {
+	min, max   time.Time
+	count      int64
+	unknown    int64
+	rangeError error
+}
+
+func (s *mockUnknownStore) Warmup(context.Context, []int64, time.Time) ([]storage.SensorEvent, error) {
+	return nil, nil
+}
+
+func (s *mockUnknownStore) Stream(ctx context.Context, req storage.StreamRequest) (<-chan []storage.SensorEvent, <-chan error) {
+	dataCh := make(chan []storage.SensorEvent)
+	errCh := make(chan error, 1)
+	go func() {
+		defer close(dataCh)
+		defer close(errCh)
+		_ = req
+	}()
+	return dataCh, errCh
+}
+
+func (s *mockUnknownStore) Range(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, error) {
+	return s.min, s.max, s.count, s.rangeError
+}
+
+func (s *mockUnknownStore) RangeWithUnknown(context.Context, []int64, time.Time, time.Time) (time.Time, time.Time, int64, int64, error) {
+	return s.min, s.max, s.count, s.unknown, s.rangeError
+}
+
 func newTestServer(t *testing.T) (*httptest.Server, *Manager) {
 	t.Helper()
 	svc := replay.Service{
@@ -57,7 +88,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *Manager) {
 		Output:  &apiTestClient{},
 	}
 	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false, 0)
-	srv := NewServer(mgr, nil)
+	srv := NewServer(mgr, nil, "")
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -77,7 +108,30 @@ func newTestServerWithTimeout(t *testing.T, timeout time.Duration) (*httptest.Se
 		Output:  &apiTestClient{},
 	}
 	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false, timeout)
-	srv := NewServer(mgr, nil)
+	srv := NewServer(mgr, nil, "")
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Skipf("skip: tcp listen not permitted: %v", err)
+	}
+	testSrv := httptest.NewUnstartedServer(srv.mux)
+	testSrv.Listener = ln
+	testSrv.Start()
+	t.Cleanup(testSrv.Close)
+	return testSrv, mgr
+}
+
+func newServerWithMode(t *testing.T, mode string, store storage.Storage) (*httptest.Server, *Manager) {
+	t.Helper()
+	if store == nil {
+		store = &apiTestStorage{}
+	}
+	svc := replay.Service{
+		Storage: store,
+		Output:  &apiTestClient{},
+	}
+	mgr := NewManager(svc, []int64{1, 2}, nil, 1.0, time.Second, 16, nil, true, false, 0)
+	srv := NewServer(mgr, nil, mode)
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -158,6 +212,100 @@ func TestHandlersInvalidJSON(t *testing.T) {
 			t.Fatalf("%s expected 400 on bad json, got %d", path, resp.StatusCode)
 		}
 		resp.Body.Close()
+	}
+}
+
+// Unknown sensors handling modes (warn/strict/off) for range endpoints.
+func TestRangeUnknownModesGET(t *testing.T) {
+	now := time.Now().UTC()
+	store := &mockUnknownStore{
+		min:     now.Add(-time.Hour),
+		max:     now,
+		count:   5,
+		unknown: 3,
+	}
+
+	cases := []struct {
+		mode       string
+		wantStatus int
+	}{
+		{"warn", http.StatusOK},
+		{"off", http.StatusOK},
+		{"strict", http.StatusUnprocessableEntity},
+	}
+	for _, tc := range cases {
+		testSrv, _ := newServerWithMode(t, tc.mode, store)
+
+		resp, err := http.Get(testSrv.URL + "/api/v2/job/range")
+		if err != nil {
+			t.Fatalf("GET range mode=%s: %v", tc.mode, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != tc.wantStatus {
+			t.Fatalf("mode=%s status=%d want=%d", tc.mode, resp.StatusCode, tc.wantStatus)
+		}
+		if tc.wantStatus == http.StatusOK {
+			var data map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+				t.Fatalf("decode mode=%s: %v", tc.mode, err)
+			}
+			if tc.mode == "warn" {
+				if unk, ok := data["unknown_count"].(float64); !ok || int64(unk) != store.unknown {
+					t.Fatalf("mode=%s unknown_count=%v want=%d", tc.mode, data["unknown_count"], store.unknown)
+				}
+			}
+		}
+	}
+}
+
+func TestRangeUnknownModesPOST(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	store := &mockUnknownStore{
+		min:     now.Add(-time.Hour),
+		max:     now,
+		count:   5,
+		unknown: 2,
+	}
+	body := map[string]any{
+		"from":   now.Add(-time.Minute).Format(time.RFC3339),
+		"to":     now.Format(time.RFC3339),
+		"step":   "1s",
+		"speed":  1.0,
+		"window": "1s",
+	}
+
+	cases := []struct {
+		mode       string
+		wantStatus int
+	}{
+		{"warn", http.StatusOK},
+		{"off", http.StatusOK},
+		{"strict", http.StatusUnprocessableEntity},
+	}
+	for _, tc := range cases {
+		testSrv, _ := newServerWithMode(t, tc.mode, store)
+
+		buf, _ := json.Marshal(body)
+		req, _ := http.NewRequest(http.MethodPost, testSrv.URL+"/api/v2/job/range", bytes.NewReader(buf))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-TM-Session", testSessionToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST range mode=%s: %v", tc.mode, err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != tc.wantStatus {
+			t.Fatalf("mode=%s status=%d want=%d", tc.mode, resp.StatusCode, tc.wantStatus)
+		}
+		if tc.wantStatus == http.StatusOK && tc.mode == "warn" {
+			var data map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+				t.Fatalf("decode mode=%s: %v", tc.mode, err)
+			}
+			if unk, ok := data["unknown_count"].(float64); !ok || int64(unk) != store.unknown {
+				t.Fatalf("mode=%s unknown_count=%v want=%d", tc.mode, data["unknown_count"], store.unknown)
+			}
+		}
 	}
 }
 

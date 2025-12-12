@@ -29,3 +29,9 @@ type Storage interface {
 	// Range возвращает минимальный и максимальный timestamp и число уникальных датчиков для выбранных датчиков.
 	Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error)
 }
+
+// UnknownAwareStorage опционально умеет считать количество датчиков вне конфигурации
+// в выбранном временном окне.
+type UnknownAwareStorage interface {
+	RangeWithUnknown(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, int64, error)
+}

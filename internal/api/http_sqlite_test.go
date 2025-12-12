@@ -38,7 +38,7 @@ func TestHTTPAPIWithSQLiteAutoSeed(t *testing.T) {
 		Output:  output,
 	}
 	mgr := NewManager(svc, []int64{10001, 10002}, nil, 50, 2*time.Second, 16, nil, true, false, 0)
-	srv := NewServer(mgr, nil)
+	srv := NewServer(mgr, nil, "")
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skipf("skip: tcp listen not permitted: %v", err)

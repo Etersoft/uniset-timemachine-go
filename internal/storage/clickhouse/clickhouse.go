@@ -312,11 +312,18 @@ func (s *Store) Stream(ctx context.Context, req storage.StreamRequest) (<-chan [
 }
 
 func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, error) {
+	minTs, maxTs, count, _, err := s.RangeWithUnknown(ctx, sensors, from, to)
+	return minTs, maxTs, count, err
+}
+
+// RangeWithUnknown дополнительно возвращает количество датчиков вне конфигурации (unknownCount)
+// в заданном временном окне. Для этого сравнивает общее число уникальных name с числом известных.
+func (s *Store) RangeWithUnknown(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, int64, error) {
 	if len(sensors) == 0 {
-		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: sensors list is empty")
+		return time.Time{}, time.Time{}, 0, 0, fmt.Errorf("clickhouse: sensors list is empty")
 	}
 	if err := s.refreshFilter(ctx, sensors); err != nil {
-		return time.Time{}, time.Time{}, 0, err
+		return time.Time{}, time.Time{}, 0, 0, err
 	}
 
 	var query string
@@ -360,9 +367,35 @@ WHERE name IN (SELECT name FROM %s)
 	var minTs, maxTs time.Time
 	var count uint64
 	if err := row.Scan(&minTs, &maxTs, &count); err != nil {
-		return time.Time{}, time.Time{}, 0, fmt.Errorf("clickhouse: range scan: %w", err)
+		return time.Time{}, time.Time{}, 0, 0, fmt.Errorf("clickhouse: range scan: %w", err)
 	}
-	return minTs, maxTs, int64(count), nil
+	unknown := int64(0)
+	// Если есть резолвер (значит, есть словарь конфигурации), считаем общее число уникальных name в окне
+	// и сравниваем с числом известных (count). Это один запрос по выбранному диапазону.
+	if s.resolver != nil {
+		qAll := fmt.Sprintf("SELECT count(DISTINCT name) FROM %s", s.table)
+		var argsAll []any
+		clauses := make([]string, 0, 2)
+		if !from.IsZero() {
+			clauses = append(clauses, "timestamp >= ?")
+			argsAll = append(argsAll, from)
+		}
+		if !to.IsZero() {
+			clauses = append(clauses, "timestamp <= ?")
+			argsAll = append(argsAll, to)
+		}
+		if len(clauses) > 0 {
+			qAll += " WHERE " + strings.Join(clauses, " AND ")
+		}
+		var all uint64
+		if err := s.conn.QueryRow(ctx, qAll, argsAll...).Scan(&all); err == nil {
+			if all > count {
+				unknown = int64(all - count)
+			}
+		}
+	}
+
+	return minTs, maxTs, int64(count), unknown, nil
 }
 
 // hashesToNames конвертирует hashes в names через resolver (для режима без name_hid).

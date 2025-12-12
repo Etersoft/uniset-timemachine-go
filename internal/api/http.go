@@ -6,37 +6,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/http/pprof"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/pv/uniset-timemachine-go/internal/replay"
 )
 
 // Server реализует HTTP API управления проигрывателем.
 type Server struct {
-	manager  *Manager
-	mux      *http.ServeMux
-	streamer *StateStreamer
+	manager     *Manager
+	mux         *http.ServeMux
+	streamer    *StateStreamer
+	unknownMode string
 }
 
 //go:embed ui/*
 var staticFS embed.FS
 
 // NewServer создаёт HTTP сервер с зарегистрированными хендлерами.
-func NewServer(manager *Manager, streamer *StateStreamer) *Server {
+func NewServer(manager *Manager, streamer *StateStreamer, unknownMode string) *Server {
 	uiFS, err := fs.Sub(staticFS, "ui")
 	if err != nil {
 		log.Fatalf("ui assets: %v", err)
 	}
 	// Debug logging can be enabled via SetDebugLogging(true) before Listen().
 	s := &Server{
-		manager:  manager,
-		mux:      http.NewServeMux(),
-		streamer: streamer,
+		manager:     manager,
+		mux:         http.NewServeMux(),
+		streamer:    streamer,
+		unknownMode: strings.ToLower(strings.TrimSpace(unknownMode)),
 	}
 	s.routes(http.FS(uiFS))
 	return s
@@ -125,6 +129,15 @@ func (s *Server) routes(uiFS http.FileSystem) {
 	}
 	for _, route := range apiRoutes {
 		s.mux.Handle(route.path, s.withCORS(route.handler))
+	}
+}
+
+func (s *Server) unknownModeNormalized() string {
+	switch s.unknownMode {
+	case "off", "strict", "warn":
+		return s.unknownMode
+	default:
+		return "warn"
 	}
 }
 
@@ -344,11 +357,25 @@ func (s *Server) handleJobSensors(w http.ResponseWriter, r *http.Request) {
 
 // handleSetRange сохраняет параметры диапазона без старта задачи.
 func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
+	mode := s.unknownModeNormalized()
 	switch r.Method {
 	case http.MethodGet:
-		min, max, count, err := s.manager.Range(r.Context())
+		var (
+			min, max       time.Time
+			count, unknown int64
+			err            error
+		)
+		if mode == "off" {
+			min, max, count, err = s.manager.Range(r.Context())
+		} else {
+			min, max, count, unknown, err = s.manager.RangeWithUnknown(r.Context())
+		}
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err)
+			return
+		}
+		if mode == "strict" && unknown > 0 {
+			writeError(w, http.StatusUnprocessableEntity, fmt.Errorf("range contains %d sensors missing in config (strict mode)", unknown))
 			return
 		}
 		resp := map[string]string{
@@ -362,9 +389,10 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 			resp["to"] = max.Format(time.RFC3339)
 		}
 		respMap := map[string]any{
-			"from":         resp["from"],
-			"to":           resp["to"],
-			"sensor_count": count,
+			"from":          resp["from"],
+			"to":            resp["to"],
+			"sensor_count":  count,
+			"unknown_count": unknown,
 		}
 		writeJSON(w, http.StatusOK, respMap)
 	case http.MethodPost:
@@ -403,8 +431,27 @@ func (s *Server) handleSetRange(w http.ResponseWriter, r *http.Request) {
 			req.Speed = 1
 		}
 		logDebugf("[http] set range v2 from=%s to=%s step=%s speed=%f window=%s save=%v", from.Format(time.RFC3339), to.Format(time.RFC3339), step, req.Speed, window, req.SaveOutput)
+		unknown := int64(0)
+		if mode != "off" {
+			_, _, _, unknown, err = s.manager.RangeWithUnknownBounds(r.Context(), from, to)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err)
+				return
+			}
+			if mode == "strict" && unknown > 0 {
+				writeError(w, http.StatusUnprocessableEntity, fmt.Errorf("range contains %d sensors missing in config (strict mode)", unknown))
+				return
+			}
+			if unknown > 0 {
+				log.Printf("[http] set range: found %d unknown sensors (mode=%s)", unknown, mode)
+			}
+		}
 		s.manager.SetRange(from, to, step, req.Speed, window, req.SaveOutput)
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		resp := map[string]any{"status": "ok"}
+		if mode != "off" {
+			resp["unknown_count"] = unknown
+		}
+		writeJSON(w, http.StatusOK, resp)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}

@@ -25,37 +25,38 @@ import (
 )
 
 type options struct {
-	configYAML    string
-	dbURL         string
-	config        string
-	sensorSet     string
-	from          string
-	to            string
-	step          time.Duration
-	window        time.Duration
-	speed         float64
-	output        string
-	smURL         string
-	smSupplier    string
-	smParamMode   string
-	smParamPrefix string
-	chTable       string
-	batchSize     int
-	httpAddr      string
-	wsBatchTime   time.Duration
+	configYAML     string
+	dbURL          string
+	config         string
+	sensorSet      string
+	from           string
+	to             string
+	step           time.Duration
+	window         time.Duration
+	speed          float64
+	output         string
+	smURL          string
+	smSupplier     string
+	smParamMode    string
+	smParamPrefix  string
+	chTable        string
+	batchSize      int
+	httpAddr       string
+	wsBatchTime    time.Duration
 	controlTimeout time.Duration
-	sqliteCacheMB int
-	sqliteWAL     bool
-	sqliteSyncOff bool
-	sqliteTempMem bool
-	saveOutput    bool
-	logFile       string
-	verbose       bool
-	logCache      bool
-	debugLogs     bool
-	version       bool
-	showRange     bool
-	generateCfg   string
+	unknownMode    string
+	sqliteCacheMB  int
+	sqliteWAL      bool
+	sqliteSyncOff  bool
+	sqliteTempMem  bool
+	saveOutput     bool
+	logFile        string
+	verbose        bool
+	logCache       bool
+	debugLogs      bool
+	version        bool
+	showRange      bool
+	generateCfg    string
 }
 
 const version = "2.0.1-dev"
@@ -167,6 +168,7 @@ func parseFlags() options {
 	flag.StringVar(&opt.httpAddr, "http-addr", "", "run HTTP control server on the given addr (e.g. :8080)")
 	flag.DurationVar(&opt.wsBatchTime, "ws-batch-time", 100*time.Millisecond, "WebSocket updates batch interval (e.g. 100ms)")
 	flag.DurationVar(&opt.controlTimeout, "control-timeout", 0, "control session timeout (0 = never release control)")
+	flag.StringVar(&opt.unknownMode, "unknown-sensors-mode", "warn", "Unknown sensors handling: warn|strict|off")
 	flag.IntVar(&opt.sqliteCacheMB, "sqlite-cache-mb", 100, "SQLite cache size (MB) for PRAGMA cache_size; 0 to skip")
 	flag.BoolVar(&opt.sqliteWAL, "sqlite-wal", true, "Enable SQLite WAL mode (PRAGMA journal_mode=WAL)")
 	flag.BoolVar(&opt.sqliteSyncOff, "sqlite-sync-off", true, "Set PRAGMA synchronous=OFF for SQLite")
@@ -449,7 +451,7 @@ func runHTTPServer(ctx context.Context, opt options, cfg *config.Config, sensors
 	manager := api.NewManager(service, sensors, cfg, opt.speed, opt.window, opt.batchSize, streamer, saveAllowed, opt.saveOutput, opt.controlTimeout)
 	streamer.SetControlStatusProvider(manager.ControlStatus)
 	api.SetDebugLogging(opt.debugLogs)
-	server := api.NewServer(manager, streamer)
+	server := api.NewServer(manager, streamer, opt.unknownMode)
 	addr := opt.httpAddr
 	if addr == "" {
 		addr = ":8080"

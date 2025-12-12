@@ -333,6 +333,13 @@ func (s *Store) Range(ctx context.Context, sensors []int64, from, to time.Time) 
 	return minTs, maxTs, sensorsWithData, nil
 }
 
+// RangeWithUnknown реализует UnknownAwareStorage.
+// Для InfluxDB не считаем unknown отдельно, возвращаем 0.
+func (s *Store) RangeWithUnknown(ctx context.Context, sensors []int64, from, to time.Time) (time.Time, time.Time, int64, int64, error) {
+	min, max, count, err := s.Range(ctx, sensors, from, to)
+	return min, max, count, 0, err
+}
+
 // resolveNames преобразует список хешей в имена measurements.
 func (s *Store) resolveNames(hashes []int64) ([]string, map[string]int64, error) {
 	names := make([]string, 0, len(hashes))

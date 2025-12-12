@@ -60,6 +60,9 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("clickhouse: parse DSN: %w", err)
 	}
+	// Временные таблицы работают в пределах соединения, поэтому держим единичный коннект.
+	opts.MaxOpenConns = 1
+	opts.MaxIdleConns = 1
 
 	conn, err := ch.Open(opts)
 	if err != nil {
@@ -89,6 +92,12 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 
 	// Check server timezone
 	store.checkTimezone(ctx)
+
+	// Проверяем возможность создания временной таблицы фильтра (и тип в зависимости от режима)
+	if err := store.ensureFilterTable(ctx); err != nil {
+		conn.Close()
+		return nil, err
+	}
 
 	return store, nil
 }
@@ -476,6 +485,24 @@ func (s *Store) refreshFilterName(ctx context.Context, hashes []int64) error {
 	}
 	if err := batch.Send(); err != nil {
 		return fmt.Errorf("clickhouse: send filter batch: %w", err)
+	}
+	return nil
+}
+
+// ensureFilterTable проверяет возможность создания временной таблицы фильтра.
+func (s *Store) ensureFilterTable(ctx context.Context) error {
+	colDef := "name String"
+	switch s.mode {
+	case hashModeNameHID:
+		colDef = "name_hid Int64"
+	case hashModeUnisetHID:
+		colDef = "uniset_hid UInt32"
+	}
+	if err := s.conn.Exec(ctx, fmt.Sprintf("CREATE TEMPORARY TABLE IF NOT EXISTS %s (%s)", filterTable, colDef)); err != nil {
+		return fmt.Errorf("clickhouse: create temp filter table: %w", err)
+	}
+	if err := s.conn.Exec(ctx, fmt.Sprintf("TRUNCATE TABLE %s", filterTable)); err != nil {
+		return fmt.Errorf("clickhouse: truncate temp filter table: %w", err)
 	}
 	return nil
 }

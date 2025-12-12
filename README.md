@@ -51,6 +51,9 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
   --confile config/test.xml --slist ALL --ws-batch-time 100ms
 ```
 
+Дополнительные флаги сервера:
+- `--unknown-sensors-mode warn|strict|off` — контроль датчиков, отсутствующих в конфиге, при `/api/v2/job/range` (unknown_count в warn, блокировка в strict, отключение в off).
+
 Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
 Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
 

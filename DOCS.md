@@ -27,6 +27,10 @@ go run ./cmd/timemachine \
   - `GET /api/v2/session` — **только** статус (не забирает управление): `session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`. Параметр `ping=1` обновляет `last_seen` для текущего контроллера.
   - `POST /api/v2/session/claim` — “забрать управление” при пустом/просроченном контроллере (таймаут `--control-timeout`, `0` — не отдавать). Сервер гарантирует, что успех получит только первый запрос в состоянии “свободно/просрочено”.
   - Управляющие эндпоинты (`/api/v2/job/*`, `/api/v2/job/sensors`, `/api/v2/snapshot`) возвращают `403 control locked`, если токен не совпадает с активной сессией. UI автоклеймит только при первой загрузке, если контроллера нет; иначе показывает кнопку “Забрать управление” после таймаута.
+- Расчёт неизвестных датчиков (`unknown_count`) на `/api/v2/job/range` управляется флагом `--unknown-sensors-mode`:
+  - `warn` (по умолчанию) — возвращает `unknown_count` в ответе; при POST логирует предупреждение.
+  - `strict` — если в диапазоне есть датчики, отсутствующие в конфиге, возвращает `422` с сообщением (без списка).
+  - `off` — unknown не считается (нет `unknown_count` в ответе, ошибок нет).
 
 ### API v2 (pending range/seek, рабочий список)
 
@@ -34,7 +38,7 @@ go run ./cmd/timemachine \
 - `GET /api/v2/job/sensors` — текущий рабочий список имён датчиков, которым оперирует проигрыватель. Возвращает `sensors`, `count`, `default` (true, если выбран весь список).
 - `POST /api/v2/job/sensors` — установить рабочий список. Body: `{"sensors":["name1","name2",...]}`. Ответ: `status`, `sensors` (принятый список), `accepted_count`, `rejected` (число отброшенных), `count`, `default` (true, если выбран весь список). Если переданы только невалидные имена — `400`.
 - `GET /api/v2/job/sensors/count?from=...&to=...` — количество уникальных датчиков в выбранном диапазоне истории.
-- `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max и `sensor_count`.
+- `POST /api/v2/job/range` — сохранить диапазон/шаг/скорость/окно без старта. `GET /api/v2/job/range` — вернуть доступный min/max, `sensor_count` и `unknown_count` (если включён расчёт неизвестных датчиков).
 - `POST /api/v2/job/seek` — перемотка; если job не запущен, запоминает pending seek.
 - `POST /api/v2/job/start` — запустить задачу, используя pending range/seek.
 - `POST /api/v2/job/reset` — сбросить состояние сервера: остановить задачу, очистить pending range/seek, отправить `reset` в WebSocket.

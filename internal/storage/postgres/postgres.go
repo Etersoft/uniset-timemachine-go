@@ -55,6 +55,11 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		pool.Close()
 		return nil, err
 	}
+	// Проверяем возможность создавать временные таблицы (нужно для фильтрации сенсоров)
+	if err := ensureTempTable(ctx, pool); err != nil {
+		pool.Close()
+		return nil, err
+	}
 
 	return &Store{
 		pool:     pool,
@@ -79,6 +84,25 @@ func ensureUTCTimezone(ctx context.Context, pool *pgxpool.Pool) error {
 	// For pgxpool we need to use BeforeAcquire or configure at connection string level
 	// For simplicity, just log a warning - the data format used in queries is timezone-agnostic
 	log.Printf("postgres: data will be interpreted as UTC regardless of server timezone")
+	return nil
+}
+
+// ensureTempTable проверяет возможность создавать временные таблицы в текущей БД.
+// Мы не используем эту таблицу в запросах, но проверяем права на случай, если
+// в дальнейшем она понадобится (аналогично SQLite/ClickHouse фильтрам).
+func ensureTempTable(ctx context.Context, pool *pgxpool.Pool) error {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("postgres: acquire connection for temp table check: %w", err)
+	}
+	defer conn.Release()
+
+	if _, err := conn.Exec(ctx, `CREATE TEMP TABLE IF NOT EXISTS tm_sensors_tmp(sensor_id BIGINT) ON COMMIT DROP`); err != nil {
+		return fmt.Errorf("postgres: create temp table: %w", err)
+	}
+	if _, err := conn.Exec(ctx, `TRUNCATE tm_sensors_tmp`); err != nil {
+		return fmt.Errorf("postgres: truncate temp table: %w", err)
+	}
 	return nil
 }
 

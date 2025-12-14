@@ -275,9 +275,9 @@
           <input id="tableFilter" type="text" placeholder="Введите имя или текст..." style="max-width:340px; flex:0 0 auto;">
           <span class="table-meta" id="tableMeta" style="min-width:220px;">—</span>
         </div>
-        <div class="table-wrap" style="margin-top:12px;">
+        <div class="table-wrap" id="tableScrollContainer" style="margin-top:12px; max-height:600px; overflow-y:auto;">
           <table>
-            <thead>
+            <thead style="position:sticky; top:0; z-index:1; background:#0f172a;">
               <tr>
                 <th style="width:40px; text-align:center;"><input id="tableSelectAll" type="checkbox" style="width:auto; margin:0;"></th>
                 <th style="width:180px;">Name</th>
@@ -697,6 +697,7 @@
         meta: document.getElementById('tableMeta'),
         precision: document.getElementById('tablePrecision'),
         selectAll: document.getElementById('tableSelectAll'),
+        scrollContainer: document.getElementById('tableScrollContainer'),
       },
       charts: {
         sensors: document.getElementById('chartSensors'),
@@ -829,6 +830,14 @@
     lastTs: '-',
     precision: 3,
     selected: new Set(),
+    // Виртуальный скроллинг
+    virtual: {
+      rowHeight: 33,       // Высота строки в пикселях
+      visibleCount: 20,    // Количество видимых строк
+      overscan: 5,         // Дополнительные строки сверху/снизу
+      scrollTop: 0,        // Текущая позиция скролла
+      allRows: [],         // Кэш всех отфильтрованных строк
+    },
   };
   const workingPicker = {
     tab: 'existing',
@@ -1277,7 +1286,7 @@
       if (tableRenderTimer) return;
       tableRenderTimer = setTimeout(() => {
         tableRenderTimer = null;
-        renderTable();
+        renderTable(true); // Обновляем кэш при изменении данных
       }, 50);
     }
 
@@ -1329,48 +1338,94 @@
 
   function renderTable(force) {
     if (!els.table.body) return;
-    const filtered = getFilteredTableRows(true);
-      const now = Date.now();
-      const html = filtered.map(r => {
-        const isChanged = r.changedAt && now - r.changedAt < 4000;
-        const value = r.hasValue ? formatValue(r.value, tableValuePrecision) : '—';
-        const metaText = tableState.meta.get(r.name)?.textname || sensorIndex.byName.get(r.name)?.textname || '';
-        const metaType = tableState.meta.get(r.name)?.iotype || sensorIndex.byName.get(r.name)?.iotype || '';
-        const metaConfigId = tableState.meta.get(r.name)?.configId || sensorIndex.byName.get(r.name)?.configId;
-        const text = r.textname || metaText || '';
-        const checked = tableState.selected.has(r.name) ? 'checked' : '';
-        const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`;
-        // Показываем configId в скобках если он есть
-        const nameWithId = metaConfigId ? `${r.name || ''} <span style="color:#94a3b8;">(${metaConfigId})</span>` : (r.name || '');
-        return `<tr class="${rowClass.trim()}">
-          <td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.name}" ${checked}></td>
-          <td>${nameWithId}</td>
-          <td class="value">${value}</td>
-          <td>${text}</td>
-          <td style="text-align:center;">${metaType || ''}</td>
-          <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.name}" title="Добавить на график">📊</button></td>
-        </tr>`;
-      }).join('');
-      els.table.body.innerHTML = html || `<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
-      if (els.table.meta) {
-        const ts = tableState.lastTs || '—';
-        const total = getFilteredTableRows(false).length;
-        const sel = tableState.selected.size;
-        els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts} · ${filtered.length}/${total} строк · Выбрано: ${sel}`;
-      }
-      if (els.table.filter) {
-        setDisabled(els.table.filter, false);
-      }
-      if (els.table.precision) {
-        els.table.precision.value = String(tableState.precision ?? 3);
-      }
-      if (els.table.selectAll) {
-        const base = getFilteredTableRows(false);
-        const allSelected = base.length > 0 && base.every(r => tableState.selected.has(r.name));
-        els.table.selectAll.checked = allSelected && tableState.selected.size > 0;
-        els.table.selectAll.indeterminate = tableState.selected.size > 0 && !allSelected;
-      }
+    const v = tableState.virtual;
+
+    // При force=true обновляем кэш всех строк
+    if (force) {
+      v.allRows = getFilteredTableRows(true);
     }
+
+    const allRows = v.allRows;
+    const totalRows = allRows.length;
+
+    if (totalRows === 0) {
+      els.table.body.innerHTML = `<tr><td colspan="6" style="text-align:center; color:#94a3b8; padding:16px;">Нет данных</td></tr>`;
+      updateTableMeta(0, 0);
+      return;
+    }
+
+    // Рассчитываем видимый диапазон
+    const scrollTop = els.table.scrollContainer?.scrollTop || 0;
+    const containerHeight = els.table.scrollContainer?.clientHeight || 600;
+    v.visibleCount = Math.ceil(containerHeight / v.rowHeight) + 1;
+
+    const startIdx = Math.max(0, Math.floor(scrollTop / v.rowHeight) - v.overscan);
+    const endIdx = Math.min(totalRows, startIdx + v.visibleCount + v.overscan * 2);
+
+    // Высоты spacer-ов
+    const topHeight = startIdx * v.rowHeight;
+    const bottomHeight = (totalRows - endIdx) * v.rowHeight;
+
+    // Рендерим только видимые строки
+    const now = Date.now();
+    const visibleHtml = [];
+
+    // Верхний spacer
+    if (topHeight > 0) {
+      visibleHtml.push(`<tr style="height:${topHeight}px;"><td colspan="6"></td></tr>`);
+    }
+
+    // Видимые строки
+    for (let i = startIdx; i < endIdx; i++) {
+      const r = allRows[i];
+      const isChanged = r.changedAt && now - r.changedAt < 4000;
+      const value = r.hasValue ? formatValue(r.value, tableValuePrecision) : '—';
+      const metaText = tableState.meta.get(r.name)?.textname || sensorIndex.byName.get(r.name)?.textname || '';
+      const metaType = tableState.meta.get(r.name)?.iotype || sensorIndex.byName.get(r.name)?.iotype || '';
+      const metaConfigId = tableState.meta.get(r.name)?.configId || sensorIndex.byName.get(r.name)?.configId;
+      const text = r.textname || metaText || '';
+      const checked = tableState.selected.has(r.name) ? 'checked' : '';
+      const rowClass = `${isChanged ? 'changed' : ''} ${checked ? 'selected' : ''}`.trim();
+      const nameWithId = metaConfigId ? `${r.name || ''} <span style="color:#94a3b8;">(${metaConfigId})</span>` : (r.name || '');
+      visibleHtml.push(`<tr class="${rowClass}" style="height:${v.rowHeight}px;">
+        <td style="text-align:center;"><input type="checkbox" class="table-select" data-sensor="${r.name}" ${checked}></td>
+        <td>${nameWithId}</td>
+        <td class="value">${value}</td>
+        <td>${text}</td>
+        <td style="text-align:center;">${metaType || ''}</td>
+        <td style="text-align:center;"><button class="table-graph-btn" data-chart-add="${r.name}" title="Добавить на график">📊</button></td>
+      </tr>`);
+    }
+
+    // Нижний spacer
+    if (bottomHeight > 0) {
+      visibleHtml.push(`<tr style="height:${bottomHeight}px;"><td colspan="6"></td></tr>`);
+    }
+
+    els.table.body.innerHTML = visibleHtml.join('');
+    updateTableMeta(totalRows, endIdx - startIdx);
+  }
+
+  function updateTableMeta(totalRows, visibleRows) {
+    if (els.table.meta) {
+      const ts = tableState.lastTs || '—';
+      const total = getFilteredTableRows(false).length;
+      const sel = tableState.selected.size;
+      els.table.meta.textContent = `Step: ${tableState.lastStep || '—'} · ${ts} · ${totalRows}/${total} строк · Выбрано: ${sel}`;
+    }
+    if (els.table.filter) {
+      setDisabled(els.table.filter, false);
+    }
+    if (els.table.precision) {
+      els.table.precision.value = String(tableState.precision ?? 3);
+    }
+    if (els.table.selectAll) {
+      const base = getFilteredTableRows(false);
+      const allSelected = base.length > 0 && base.every(r => tableState.selected.has(r.name));
+      els.table.selectAll.checked = allSelected && tableState.selected.size > 0;
+      els.table.selectAll.indeterminate = tableState.selected.size > 0 && !allSelected;
+    }
+  }
 
   function setSensorsDialogError(msg) {
     if (!els.sensorsDialogError) return;
@@ -3203,6 +3258,17 @@
           tableValuePrecision = Number.isFinite(v) ? v : 3;
           tableState.precision = tableValuePrecision;
           renderTable(true);
+        });
+      }
+      // Виртуальный скроллинг — перерисовка при скролле
+      if (els.table.scrollContainer) {
+        let scrollTimer = null;
+        els.table.scrollContainer.addEventListener('scroll', () => {
+          if (scrollTimer) return;
+          scrollTimer = setTimeout(() => {
+            scrollTimer = null;
+            renderTable(false); // false — не обновлять кэш, только перерисовать
+          }, 16); // ~60fps
         });
       }
       if (els.working?.btn) {

@@ -566,6 +566,36 @@
     if (str.length <= max) return str;
     return `${str.slice(0, max)}…`;
   }
+
+  // Утилиты для работы с датами
+  const DateUtils = {
+    toRFC3339(d) {
+      if (!d || !(d instanceof Date) || isNaN(d.getTime())) return '';
+      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
+    },
+    fromISO(v) {
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d;
+    },
+    toInputFormat(iso) {
+      const d = this.fromISO(iso);
+      if (!d) return '';
+      const pad = n => String(n).padStart(2, '0');
+      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+    },
+    fromInputFormat(val) {
+      if (!val) return '';
+      const d = new Date(val + 'Z');
+      return isNaN(d.getTime()) ? '' : this.toRFC3339(d);
+    },
+    fromUnix(v) {
+      if (!Number.isFinite(v) || v <= 0) return '';
+      const d = new Date(v);
+      return isNaN(d.getTime()) ? '' : this.toRFC3339(d);
+    }
+  };
+
+
   function downloadDiag() {
     if (!diagBuffer.length) return;
     const blob = new Blob([diagBuffer.join('\n')], { type: 'text/plain' });
@@ -833,27 +863,28 @@
   function getSensorMeta(name) {
     return sensorIndex.byName.get(name) || tableState.meta.get(name) || {};
   }
-  function getSensorType(name) {
-    const t = (getSensorMeta(name)?.iotype || '').toString().toUpperCase();
-    return t;
-  }
-  function isDiscreteIO(io) {
-    const t = (io || '').toString().toUpperCase();
-    return t === 'DI' || t === 'DO';
-  }
-  function isAnalogIO(io) {
-    const t = (io || '').toString().toUpperCase();
-    if (!t) return true;
-    return t === 'AI' || t === 'AO' || t === '';
-  }
-  function isDiscreteSensor(name) {
-    const t = getSensorType(name);
-    return isDiscreteIO(t);
-  }
-  function isAnalogSensor(name) {
-    const t = getSensorType(name);
-    return isAnalogIO(t);
-  }
+
+  // Объект для работы с типами датчиков
+  const SensorType = {
+    DISCRETE: ['DI', 'DO'],
+    ANALOG: ['AI', 'AO'],
+
+    normalize(io) {
+      return (io || '').toString().toUpperCase();
+    },
+    isDiscrete(io) {
+      return this.DISCRETE.includes(this.normalize(io));
+    },
+    isAnalog(io) {
+      const t = this.normalize(io);
+      // Пустой тип считается аналоговым по умолчанию
+      return !t || this.ANALOG.includes(t);
+    },
+    get(name) {
+      return this.normalize(getSensorMeta(name)?.iotype);
+    }
+  };
+
 
   function allSensorNames() {
     return Array.from(sensorIndex.byName.keys()).sort();
@@ -1026,19 +1057,13 @@
     return num > 0 ? 1 : 0;
   }
 
-  function formatChartValue(v) {
+  function formatValue(v, precision = 3) {
     if (v === null || v === undefined) return '0';
     const num = Number(v);
     if (!Number.isFinite(num)) return '0';
-    return num.toFixed(chartValuePrecision);
+    return num.toFixed(precision);
   }
 
-  function formatTableValue(v) {
-    if (v === null || v === undefined) return '0';
-    const num = Number(v);
-    if (!Number.isFinite(num)) return '0';
-    return num.toFixed(tableValuePrecision);
-  }
 
     function log(message, state = true) {
       const level = typeof state === 'string' ? state : (state ? 'ok' : 'err');
@@ -1146,12 +1171,6 @@
       }
     }
 
-    function unixToISO(v) {
-      if (!Number.isFinite(v) || v <= 0) return '';
-      const d = new Date(v);
-      if (Number.isNaN(d.getTime())) return '';
-      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
-    }
 
     function handleWSMessage(msg) {
       if (!msg || typeof msg !== 'object') return;
@@ -1165,7 +1184,7 @@
         state.controlLocked = true;
       }
       updateControlLockUI();
-      const tsStr = msg.step_ts || unixToISO(msg.step_unix);
+      const tsStr = msg.step_ts || DateUtils.fromUnix(msg.step_unix);
       if (msg.step_id !== undefined) {
         tableState.lastStep = msg.step_id || 0;
       }
@@ -1314,7 +1333,7 @@
       const now = Date.now();
       const html = filtered.map(r => {
         const isChanged = r.changedAt && now - r.changedAt < 4000;
-        const value = r.hasValue ? formatTableValue(r.value) : '—';
+        const value = r.hasValue ? formatValue(r.value, tableValuePrecision) : '—';
         const metaText = tableState.meta.get(r.name)?.textname || sensorIndex.byName.get(r.name)?.textname || '';
         const metaType = tableState.meta.get(r.name)?.iotype || sensorIndex.byName.get(r.name)?.iotype || '';
         const metaConfigId = tableState.meta.get(r.name)?.configId || sensorIndex.byName.get(r.name)?.configId;
@@ -1606,7 +1625,7 @@
         const data = existing?.data ? existing.data.slice() : [];
         const lastValue = existing?.lastValue ?? null;
         const lastTs = existing?.lastTs ?? null;
-        const iotype = existing?.iotype || getSensorType(name);
+        const iotype = existing?.iotype || SensorType.get(name);
         next.set(name, {
           name,
           label: chartLabelByName(name),
@@ -1667,9 +1686,9 @@
       try {
         const rows = chartState.selected.map((name) => {
           const ds = chartState.datasets.get(name) || {};
-          const val = formatChartValue(ds.lastValue);
+          const val = formatValue(ds.lastValue, chartValuePrecision);
           const color = ds.color || '#22d3ee';
-          const ts = ds.lastTs ? toRFC3339(new Date(ds.lastTs)) : '—';
+          const ts = ds.lastTs ? DateUtils.toRFC3339(new Date(ds.lastTs)) : '—';
           const text = (sensorIndex.byName.get(name)?.textname) || '—';
           const muted = chartState.focused !== null && chartState.focused !== name;
           const rowClass = muted ? 'legend-muted' : 'legend-active';
@@ -1712,86 +1731,84 @@
       updateChartInputState();
     }
 
+  // Общие функции для suggestion-списков
+  function getSuggestionItems(query = '') {
+    const q = query.trim().toLowerCase();
+    const items = [];
+    sensorIndex.byName.forEach((meta, name) => {
+      if (!isWorkingSensor(name)) return;
+      if (chartState.selected.includes(name)) return;
+      if (q && !name.toLowerCase().includes(q)) return;
+      items.push({ name });
+    });
+    items.sort((a, b) => a.name.localeCompare(b.name));
+    return { items: items.slice(0, 50), totalCount: items.length };
+  }
+
+  function highlightMatch(str, query) {
+    if (!query) return str;
+    const idx = str.toLowerCase().indexOf(query.toLowerCase());
+    if (idx === -1) return str;
+    return `${str.slice(0, idx)}<span class="chart-suggestion-highlight">${str.slice(idx, idx + query.length)}</span>${str.slice(idx + query.length)}`;
+  }
+
+  function renderSuggestionItems(items, query = '') {
+    if (!els.charts.suggestBox) return;
+    if (!items.length) {
+      els.charts.suggestBox.style.display = 'none';
+      els.charts.suggestBox.innerHTML = '';
+      return;
+    }
+    chartState.suggest.items = items;
+    chartState.suggest.active = 0;
+    els.charts.suggestBox.innerHTML = items.map((item, idx) => {
+      const activeClass = idx === 0 ? 'active' : '';
+      const label = highlightMatch(chartLabelByName(item.name), query);
+      return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.name}">${label}</div>`;
+    }).join('');
+    els.charts.suggestBox.style.display = 'block';
+  }
+
   function renderChartSuggestions(query) {
     if (!els.charts.suggestBox) return;
     const q = (query || '').trim().toLowerCase();
     const sameQuery = q === (chartState.suggest.lastQuery || '');
     if (chartState.suggest.locked && sameQuery && els.charts.suggestBox.style.display === 'block') {
-        updateChartInputState();
-        return; // не сбрасываем выделение, пока пользователь навигирует по списку
-      }
-      chartState.suggest.lastQuery = q;
-      chartState.suggest.locked = false;
-    const items = [];
-    let availableCount = 0;
-    sensorIndex.byName.forEach((meta, name) => {
-        if (!isWorkingSensor(name)) return;
-        if (chartState.selected.includes(name)) return;
-        const text = name.toLowerCase();
-        if (q && !text.includes(q)) return;
-        items.push({ name });
-        availableCount++;
-      });
-      if (!q) {
-        hideChartSuggestions();
-        updateChartInputState(availableCount);
-        return;
-      }
-      items.sort((a, b) => a.name.localeCompare(b.name));
-      const limited = items.slice(0, 50);
-      if (!limited.length) {
-        els.charts.suggestBox.style.display = 'none';
-        els.charts.suggestBox.innerHTML = '';
-        updateChartInputState(availableCount);
-        return;
-      }
-      chartState.suggest.items = limited;
-      chartState.suggest.active = limited.length ? 0 : -1;
-      const highlight = (str) => {
-        if (!q) return str;
-        const idx = str.toLowerCase().indexOf(q);
-        if (idx === -1) return str;
-        const before = str.slice(0, idx);
-        const match = str.slice(idx, idx + q.length);
-        const after = str.slice(idx + q.length);
-        return `${before}<span class="chart-suggestion-highlight">${match}</span>${after}`;
-      };
-      els.charts.suggestBox.innerHTML = limited.map((item, idx) => {
-        const activeClass = idx === chartState.suggest.active ? 'active' : '';
-        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.name}">${highlight(chartLabelByName(item.name))}</div>`;
-      }).join('');
-      els.charts.suggestBox.style.display = 'block';
-      updateChartInputState(availableCount);
+      updateChartInputState();
+      return;
     }
-
-    function hideChartSuggestions() {
-      if (!els.charts.suggestBox) return;
+    chartState.suggest.lastQuery = q;
+    chartState.suggest.locked = false;
+    const { items, totalCount } = getSuggestionItems(q);
+    if (!q) {
+      hideChartSuggestions();
+      updateChartInputState(totalCount);
+      return;
+    }
+    if (!items.length) {
       els.charts.suggestBox.style.display = 'none';
       els.charts.suggestBox.innerHTML = '';
-      chartState.suggest = { items: [], active: -1, locked: false, lastQuery: chartState.suggest.lastQuery || '' };
+      updateChartInputState(totalCount);
+      return;
     }
+    renderSuggestionItems(items, q);
+    updateChartInputState(totalCount);
+  }
 
-    // Показать все доступные датчики (для навигации стрелками при пустом поле)
-    function showAllChartSuggestions() {
-      if (!els.charts.suggestBox) return;
-      const items = [];
-      sensorIndex.byName.forEach((meta, name) => {
-        if (!isWorkingSensor(name)) return;
-        if (chartState.selected.includes(name)) return;
-        items.push({ name });
-      });
-      items.sort((a, b) => a.name.localeCompare(b.name));
-      const limited = items.slice(0, 50);
-      if (!limited.length) return;
-      chartState.suggest.items = limited;
-      chartState.suggest.active = 0;
-      chartState.suggest.locked = true;
-      els.charts.suggestBox.innerHTML = limited.map((item, idx) => {
-        const activeClass = idx === 0 ? 'active' : '';
-        return `<div class="chart-suggest-item ${activeClass}" data-sensor="${item.name}">${chartLabelByName(item.name)}</div>`;
-      }).join('');
-      els.charts.suggestBox.style.display = 'block';
-    }
+  function hideChartSuggestions() {
+    if (!els.charts.suggestBox) return;
+    els.charts.suggestBox.style.display = 'none';
+    els.charts.suggestBox.innerHTML = '';
+    chartState.suggest = { items: [], active: -1, locked: false, lastQuery: chartState.suggest.lastQuery || '' };
+  }
+
+  function showAllChartSuggestions() {
+    if (!els.charts.suggestBox) return;
+    const { items } = getSuggestionItems('');
+    if (!items.length) return;
+    chartState.suggest.locked = true;
+    renderSuggestionItems(items);
+  }
 
     function moveSuggestActive(delta) {
       const items = chartState.suggest.items || [];
@@ -1806,7 +1823,7 @@
 
     function buildChartDatasets() {
       return Array.from(chartState.datasets.values())
-        .filter(ds => isAnalogIO(ds.iotype) && isAnalogSensor(ds.name))
+        .filter(ds => SensorType.isAnalog(ds.iotype) && SensorType.isAnalog(SensorType.get(ds.name)))
         .map(ds => ({
         label: ds.label,
         data: ds.data,
@@ -1823,7 +1840,7 @@
 
     function getStepOffsets() {
       const offsets = new Map();
-      const discrete = chartState.selected.filter(isDiscreteSensor);
+      const discrete = chartState.selected.filter(name => SensorType.isDiscrete(SensorType.get(name)));
       discrete.forEach((name, idx) => offsets.set(name, idx));
       return offsets;
     }
@@ -1831,7 +1848,7 @@
     function buildStepDatasets() {
       const offsets = getStepOffsets();
       const used = new Set(Array.from(chartState.datasets.values()).map(ds => (ds.color || '').toLowerCase()).filter(Boolean));
-      const discreteNames = chartState.selected.filter(isDiscreteSensor);
+      const discreteNames = chartState.selected.filter(name => SensorType.isDiscrete(SensorType.get(name)));
       return discreteNames.map((name, idx) => {
         const ds = chartState.datasets.get(name) || {};
         const color = ds.color || pickChartColor(name, used, idx) || '#22d3ee';
@@ -1900,7 +1917,7 @@
         chartState.chartStep.data.datasets = buildStepDatasets();
         chartState.chartStep.options.scales.x.min = xMin;
         chartState.chartStep.options.scales.x.max = xMax;
-        const tracks = Math.max(chartState.selected.filter(isDiscreteSensor).length, 1);
+        const tracks = Math.max(chartState.selected.filter(name => SensorType.isDiscrete(SensorType.get(name))).length, 1);
         chartState.chartStep.options.scales.y.min = 0;
         chartState.chartStep.options.scales.y.max = tracks * 2;
         chartState.chartStep.update('none');
@@ -1908,6 +1925,56 @@
       updateChartMeta();
       renderLegendTable();
     }
+
+    // Общие конфигурации для Chart.js
+    const ChartConfig = {
+      timeDisplayFormats: {
+        millisecond: 'HH:mm:ss.SSS',
+        second: 'HH:mm:ss',
+        minute: 'HH:mm:ss',
+        hour: 'HH:mm',
+        day: 'yyyy-MM-dd',
+        week: 'yyyy-MM-dd',
+        month: 'yyyy-MM',
+        quarter: 'yyyy-MM',
+        year: 'yyyy',
+      },
+      createXScale(hasRange) {
+        return {
+          type: 'time',
+          time: { unit: 'second', displayFormats: this.timeDisplayFormats },
+          min: hasRange ? chartState.range.from : undefined,
+          max: hasRange ? chartState.range.to : undefined,
+          ticks: { color: '#94a3b8' },
+          grid: { color: 'rgba(255,255,255,0.05)' },
+        };
+      },
+      createZoomPlugin() {
+        return {
+          zoom: {
+            wheel: { enabled: false },
+            pinch: { enabled: false },
+            drag: {
+              enabled: true,
+              backgroundColor: 'rgba(34, 211, 238, 0.15)',
+              borderColor: 'rgba(34, 211, 238, 0.8)',
+              borderWidth: 1,
+            },
+            mode: 'x',
+            onZoomComplete: handleZoomComplete,
+          },
+          pan: { enabled: false },
+          limits: { x: { min: 'original', max: 'original' } },
+        };
+      },
+      baseOptions: {
+        animation: false,
+        responsive: false,
+        maintainAspectRatio: false,
+        parsing: false,
+        resizeDelay: 0,
+      },
+    };
 
     function rebuildStepChart(hasRange) {
       if (!els.charts.stepCanvas) return;
@@ -1919,45 +1986,21 @@
       if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
         return;
       }
-      destroyStepChart();
+      destroyChartInstance(els.charts.stepCanvas, 'chartStep');
       if (!window.Chart) return;
       const ctx = els.charts.stepCanvas.getContext('2d');
       els.charts.stepCanvas.width = width;
       els.charts.stepCanvas.height = height;
       const labels = extractChartLabels();
       const datasets = buildStepDatasets();
-      const tracks = Math.max(chartState.selected.filter(isDiscreteSensor).length, 1);
+      const tracks = Math.max(chartState.selected.filter(name => SensorType.isDiscrete(SensorType.get(name))).length, 1);
       chartState.chartStep = new Chart(ctx, {
         type: 'line',
         data: { labels, datasets },
         options: {
-          animation: false,
-          responsive: false,
-          maintainAspectRatio: false,
-          parsing: false,
-          resizeDelay: 0,
+          ...ChartConfig.baseOptions,
           scales: {
-            x: {
-              type: 'time',
-              time: {
-                unit: 'second',
-                displayFormats: {
-                  millisecond: 'HH:mm:ss.SSS',
-                  second: 'HH:mm:ss',
-                  minute: 'HH:mm:ss',
-                  hour: 'HH:mm',
-                  day: 'yyyy-MM-dd',
-                  week: 'yyyy-MM-dd',
-                  month: 'yyyy-MM',
-                  quarter: 'yyyy-MM',
-                  year: 'yyyy',
-                },
-              },
-              min: hasRange ? chartState.range.from : undefined,
-              max: hasRange ? chartState.range.to : undefined,
-              ticks: { color: '#94a3b8' },
-              grid: { color: 'rgba(255,255,255,0.05)' },
-            },
+            x: ChartConfig.createXScale(hasRange),
             y: {
               ticks: {
                 color: '#94a3b8',
@@ -1996,22 +2039,7 @@
                 },
               },
             },
-            zoom: {
-              zoom: {
-                wheel: { enabled: false },
-                pinch: { enabled: false },
-                drag: {
-                  enabled: true,
-                  backgroundColor: 'rgba(34, 211, 238, 0.15)',
-                  borderColor: 'rgba(34, 211, 238, 0.8)',
-                  borderWidth: 1,
-                },
-                mode: 'x',
-                onZoomComplete: handleZoomComplete,
-              },
-              pan: { enabled: false },
-              limits: { x: { min: 'original', max: 'original' } },
-            },
+            zoom: ChartConfig.createZoomPlugin(),
           },
         },
       });
@@ -2032,7 +2060,7 @@
     function rebuildChart(force = false) {
       if (!els.charts.canvas) return;
       if (!chartState.selected.length) {
-        destroyChart();
+        destroyChartInstance(els.charts.canvas, 'chart');
         updateChartMeta();
         renderLegendTable();
         return;
@@ -2064,8 +2092,8 @@
         }
         return;
       }
-      destroyChart();
-      destroyStepChart();
+      destroyChartInstance(els.charts.canvas, 'chart');
+      destroyChartInstance(els.charts.stepCanvas, 'chartStep');
       chartState.lastSkip = '';
       if (!window.Chart) {
         console.error('[chart] Chart.js not loaded');
@@ -2080,33 +2108,9 @@
         type: 'line',
         data: {labels, datasets},
         options: {
-          animation: false,
-          responsive: false,
-          maintainAspectRatio: false,
-          parsing: false,
-          resizeDelay: 0,
+          ...ChartConfig.baseOptions,
           scales: {
-            x: {
-              type: 'time',
-              time: {
-                unit: 'second',
-                displayFormats: {
-                  millisecond: 'HH:mm:ss.SSS',
-                  second: 'HH:mm:ss',
-                  minute: 'HH:mm:ss',
-                  hour: 'HH:mm',
-                  day: 'yyyy-MM-dd',
-                  week: 'yyyy-MM-dd',
-                  month: 'yyyy-MM',
-                  quarter: 'yyyy-MM',
-                  year: 'yyyy',
-                },
-              },
-              min: hasRange ? chartState.range.from : undefined,
-              max: hasRange ? chartState.range.to : undefined,
-              ticks: {color: '#94a3b8'},
-              grid: {color: 'rgba(255,255,255,0.05)'},
-            },
+            x: ChartConfig.createXScale(hasRange),
             y: {
               ticks: {color: '#94a3b8'},
               grid: {
@@ -2128,22 +2132,7 @@
                 label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y ?? '—'}`,
               },
             },
-            zoom: {
-              zoom: {
-                wheel: { enabled: false },
-                pinch: { enabled: false },
-                drag: {
-                  enabled: true,
-                  backgroundColor: 'rgba(34, 211, 238, 0.15)',
-                  borderColor: 'rgba(34, 211, 238, 0.8)',
-                  borderWidth: 1,
-                },
-                mode: 'x',
-                onZoomComplete: handleZoomComplete,
-              },
-              pan: { enabled: false },
-              limits: { x: { min: 'original', max: 'original' } },
-            },
+            zoom: ChartConfig.createZoomPlugin(),
           },
           interaction: {mode: 'nearest', intersect: false},
         },
@@ -2154,23 +2143,17 @@
       renderLegendTable();
     }
 
-    function destroyChart() {
-      const existing = (window.Chart && typeof Chart.getChart === 'function') ? Chart.getChart(els.charts.canvas) : null;
+    // Общая функция уничтожения графика
+    function destroyChartInstance(canvas, stateKey) {
+      if (!canvas) return;
+      const existing = (window.Chart && typeof Chart.getChart === 'function') ? Chart.getChart(canvas) : null;
       if (existing) existing.destroy();
-      if (chartState.chart) {
-        chartState.chart.destroy();
-        chartState.chart = null;
+      if (chartState[stateKey]) {
+        chartState[stateKey].destroy();
+        chartState[stateKey] = null;
       }
     }
 
-    function destroyStepChart() {
-      const existing = (window.Chart && typeof Chart.getChart === 'function') ? Chart.getChart(els.charts.stepCanvas) : null;
-      if (existing) existing.destroy();
-      if (chartState.chartStep) {
-        chartState.chartStep.destroy();
-        chartState.chartStep = null;
-      }
-    }
 
     function extractChartLabels() {
       const labels = new Set();
@@ -2313,7 +2296,7 @@
       if (chartState.selected.length >= chartAutoAddLimit && !updates?.length) return;
       if (!chartState.autoUpdate) return;
       if (els.charts.autoUpdate && !els.charts.autoUpdate.checked) return;
-      const d = parseISO(tsStr);
+      const d = DateUtils.fromISO(tsStr);
       if (!d) return;
       const t = d.getTime();
       const hasFixedRange = chartState.range.from && chartState.range.to;
@@ -2430,7 +2413,7 @@
 
     function hydrateChartDefaultsFromParams() {
       if (chartState.selected.length) return;
-      const params = state.model.params || state.model.Params || {};
+      const params = getParams();
       const sensors = params.Sensors || params.sensors;
       if (Array.isArray(sensors) && sensors.length && canAutoAddSensors(sensors)) {
         applyChartSensors(sensors, true); // автоматическое добавление — фильтруем по наличию значения
@@ -2665,7 +2648,7 @@
     async function fetchSnapshotFallback() {
       try {
         const tsDate = currentTsFromServer();
-        const ts = tsDate ? toRFC3339(tsDate) : '';
+        const ts = tsDate ? DateUtils.toRFC3339(tsDate) : '';
         if (!ts) return;
         const data = await requestJSON('POST', '/api/v2/snapshot', { ts });
         const updates = data?.updates || data?.Updates || [];
@@ -2703,14 +2686,22 @@
       return String(s || 'idle').toLowerCase();
     }
 
-    function parseISO(v) {
-      const d = new Date(v);
-      return Number.isNaN(d.getTime()) ? null : d;
+    // Унифицированные getter-ы для state.model
+    function getParams() {
+      return state.model.params || state.model.Params || {};
+    }
+
+    function getPending() {
+      return state.model.pending || state.model.Pending || {};
+    }
+
+    function getCurrentRange() {
+      return getEffectiveRange(getParams(), getPending());
     }
 
     function getRange(params) {
-      const from = parseISO(params.From || params.from);
-      const to = parseISO(params.To || params.to);
+      const from = DateUtils.fromISO(params.From || params.from);
+      const to = DateUtils.fromISO(params.To || params.to);
       return { from, to, valid: !!from && !!to && to > from };
     }
 
@@ -2742,9 +2733,7 @@
       if (!els.inputs.saveToSM) return;
       const allowed = !!(state.model.save_allowed ?? state.model.SaveAllowed ?? state.saveAllowed);
       state.saveAllowed = allowed;
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const saveInfo = extractSaveOutput(params, pending);
+      const saveInfo = extractSaveOutput(getParams(), getPending());
       const st = status || state.model.status || '';
       const runningLike = st === 'running' || st === 'stopping';
       if (allowed && !runningLike) {
@@ -2791,12 +2780,11 @@
 
     function currentTsFromServer() {
       const st = statusNormalize(state.model.status);
-      const pending = state.model.pending || state.model.Pending || {};
+      const pending = getPending();
       const pendingSeek = pending.seek_ts || pending.SeekTS;
-      const params = state.model.params || state.model.Params || {};
-      const range = getEffectiveRange(params, pending);
-      const lastTs = parseISO(state.model.last_ts || state.model.LastTS);
-      const pendingTs = pendingSeek ? parseISO(pendingSeek) : null;
+      const range = getCurrentRange();
+      const lastTs = DateUtils.fromISO(state.model.last_ts || state.model.LastTS);
+      const pendingTs = pendingSeek ? DateUtils.fromISO(pendingSeek) : null;
       // Во всех нерunning состояниях приоритет у pending seek (например, после stop/done).
       if (st !== 'running' && st !== 'stopping' && pendingTs && !Number.isNaN(pendingTs.getTime()) && pendingTs.getFullYear() > 1) {
         return pendingTs;
@@ -2822,12 +2810,12 @@
 
     function updateStatusView() {
       const st = statusNormalize(state.model.status);
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
+      const params = getParams();
+      const pending = getPending();
       const pendingSeek = pending.seek_ts || pending.SeekTS;
       const curTs = currentTsFromServer();
       const stepID = state.model.step_id ?? state.model.StepID ?? '-';
-      const lastTsText = curTs ? toRFC3339(curTs) : (state.model.last_ts ?? state.model.LastTS ?? '-');
+      const lastTsText = curTs ? DateUtils.toRFC3339(curTs) : (state.model.last_ts ?? state.model.LastTS ?? '-');
       const updates = state.model.updates_sent ?? state.model.UpdatesSent ?? '-';
       if (els.status.badge) {
         els.status.badge.textContent = st;
@@ -2865,14 +2853,13 @@
       const step = state.model.step_id || state.model.StepID || '-';
       const ts = state.model.last_ts || state.model.LastTS || '-';
       const updates = state.model.updates_sent || state.model.UpdatesSent || '-';
-      const pending = state.model.pending || state.model.Pending || {};
+      const pending = getPending();
       logUI(`indicators status=${status} step=${step} ts=${ts} updates=${updates} pendingRange=${pending.range_set || pending.RangeSet ? 'yes' : 'no'}`);
     }
 
     function updateTimeline() {
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const range = getEffectiveRange(params, pending);
+      const pending = getPending();
+      const range = getCurrentRange();
       const slider = els.timeline;
       if (!range.valid) {
         slider.disabled = true;
@@ -2894,10 +2881,10 @@
       }
       if (curTs) {
         pos = Math.max(0, Math.min(1, (curTs - range.from) / rangeMs));
-        els.currentLabel.textContent = toRFC3339(curTs);
-        logUI(`timeline render ${toRFC3339(curTs)} source=${state.previewTs ? 'preview' : 'server'}`);
+        els.currentLabel.textContent = DateUtils.toRFC3339(curTs);
+        logUI(`timeline render ${DateUtils.toRFC3339(curTs)} source=${state.previewTs ? 'preview' : 'server'}`);
       } else {
-        els.currentLabel.textContent = pending.seek_ts || pending.SeekTS || toRFC3339(range.from) || '-';
+        els.currentLabel.textContent = pending.seek_ts || pending.SeekTS || DateUtils.toRFC3339(range.from) || '-';
       }
       slider.value = Math.round(pos * 1000);
     }
@@ -2905,9 +2892,8 @@
     function updateControls() {
       // debug disabled
       const st = statusNormalize(state.model.status);
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const range = getEffectiveRange(params, pending);
+      const pending = getPending();
+      const range = getCurrentRange();
       const pendingRange = !!(pending?.range_set || pending?.RangeSet);
       const hasWorking = state.workingReady && state.workingSensors.length > 0;
       // Read-only, если контроллер присутствует и это не мы. Синхронизируем и в state.
@@ -3111,8 +3097,8 @@
     state.saveAllowed = !!(data?.save_allowed ?? data?.SaveAllowed ?? state.saveAllowed);
     syncSaveToggle();
     hydrateChartDefaultsFromParams();
-    syncChartWithParams(state.model.params || state.model.Params);
-    syncChartRange(state.model.params || state.model.Params, pending);
+    syncChartWithParams(getParams());
+    syncChartRange(getParams(), pending);
       // Если на сервере уже есть pending диапазон, считаем его выбранным (важно для восстановления состояния и тестов).
       if (pendingRange && !state.rangePicked) {
         state.rangePicked = true;
@@ -3354,15 +3340,15 @@
         const target = els.dialog.dataset.target;
         const val = els.dialogInput.value;
         if (!target || !val) return;
-        const iso = utcInputToISO(val);
+        const iso = DateUtils.fromInputFormat(val);
         const input = document.getElementById(target);
         if (input && iso) input.value = iso;
       });
       if (els.rangeDialog) {
         els.rangeDialog.addEventListener('close', () => {
           if (els.rangeDialog.returnValue !== 'ok') return;
-          const from = utcInputToISO(els.rangeFrom?.value || '');
-          const to = utcInputToISO(els.rangeTo?.value || '');
+          const from = DateUtils.fromInputFormat(els.rangeFrom?.value || '');
+          const to = DateUtils.fromInputFormat(els.rangeTo?.value || '');
           if (from) els.inputs.from.value = from;
           if (to) els.inputs.to.value = to;
           state.previewTs = null;
@@ -3446,9 +3432,7 @@
             targetDate.setUTCMilliseconds(milliseconds);
 
             // Проверяем что дата в допустимом диапазоне
-            const params = state.model.params || state.model.Params || {};
-            const pending = state.model.pending || state.model.Pending || {};
-            const range = getEffectiveRange(params, pending);
+            const range = getCurrentRange();
 
             if (!range.valid) {
               els.preciseTimeError.textContent = 'Диапазон не установлен';
@@ -3461,7 +3445,7 @@
             }
 
             // Преобразуем в RFC3339 и отправляем seek
-            const ts = toRFC3339(targetDate);
+            const ts = DateUtils.toRFC3339(targetDate);
             if (!ts) {
               els.preciseTimeError.textContent = 'Ошибка преобразования даты';
               return;
@@ -3487,12 +3471,10 @@
       els.timeline.addEventListener('change', onTimelineSeek);
       els.timeline.addEventListener('input', onTimelinePreview);
       els.timeline.addEventListener('pointerdown', () => {
-        const params = state.model.params || state.model.Params || {};
-        const pending = state.model.pending || state.model.Pending || {};
-        const range = getEffectiveRange(params, pending);
+        const range = getCurrentRange();
         if (!range.valid) return;
         const v = Number(els.timeline.value) / 1000;
-        const ts = toRFC3339(new Date(range.from.getTime() + (range.to - range.from) * v));
+        const ts = DateUtils.toRFC3339(new Date(range.from.getTime() + (range.to - range.from) * v));
         if (ts) logUI(`timeline drag start ${ts}`);
       });
       els.timeline.addEventListener('dblclick', openPreciseTimeDialog);
@@ -3704,7 +3686,7 @@
       if (st === 'paused') {
         logUI('Play button: resuming with seek');
         const targetDate = currentTsFromServer();
-        const target = targetDate ? toRFC3339(targetDate) : (state.model.last_ts || inputs.from.value.trim());
+        const target = targetDate ? DateUtils.toRFC3339(targetDate) : (state.model.last_ts || inputs.from.value.trim());
         if (target) {
           await action('seek', '/api/v2/job/seek', { ts: target, apply: false });
         }
@@ -3720,30 +3702,24 @@
     }
 
     function onTimelinePreview() {
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const rangeData = getEffectiveRange(params, pending);
-      const from = rangeData.from;
-      const to = rangeData.to;
+      const rangeData = getCurrentRange();
+      const { from, to } = rangeData;
       if (!from || !to || to <= from) return;
       const v = Number(els.timeline.value) / 1000;
       const dt = new Date(from.getTime() + (to - from) * v);
-      const iso = toRFC3339(dt);
+      const iso = DateUtils.toRFC3339(dt);
       if (!iso) return;
       state.previewTs = dt;
       els.currentLabel.textContent = iso;
     }
 
     async function onTimelineSeek() {
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const rangeData = getEffectiveRange(params, pending);
-      const from = rangeData.from;
-      const to = rangeData.to;
+      const rangeData = getCurrentRange();
+      const { from, to } = rangeData;
       if (!from || !to || to <= from) return;
       const v = Number(els.timeline.value) / 1000;
-      const ts = toRFC3339(new Date(from.getTime() + (to - from) * v));
-      state.previewTs = parseISO(ts);
+      const ts = DateUtils.toRFC3339(new Date(from.getTime() + (to - from) * v));
+      state.previewTs = DateUtils.fromISO(ts);
       logUI(`timeline seek ${ts}`);
       await seekOrPreview(ts);
     }
@@ -3763,14 +3739,14 @@
       const input = document.getElementById(targetId);
       const current = input ? input.value.trim() : '';
       els.dialog.dataset.target = targetId;
-      els.dialogInput.value = isoToUTCInput(current) || '';
+      els.dialogInput.value = DateUtils.toInputFormat(current) || '';
       els.dialog.showModal();
     }
 
     function openRangeDialog() {
       if (!els.rangeDialog || !els.rangeFrom || !els.rangeTo) return;
-      els.rangeFrom.value = isoToUTCInput(els.inputs.from.value.trim()) || '';
-      els.rangeTo.value = isoToUTCInput(els.inputs.to.value.trim()) || '';
+      els.rangeFrom.value = DateUtils.toInputFormat(els.inputs.from.value.trim()) || '';
+      els.rangeTo.value = DateUtils.toInputFormat(els.inputs.to.value.trim()) || '';
       els.rangeDialog.showModal();
     }
 
@@ -3778,8 +3754,8 @@
       if (!Number.isFinite(mins) || mins <= 0) return;
       const now = new Date();
       const from = new Date(now.getTime() - mins * 60 * 1000);
-      if (els.rangeFrom) els.rangeFrom.value = isoToUTCInput(toRFC3339(from));
-      if (els.rangeTo) els.rangeTo.value = isoToUTCInput(toRFC3339(now));
+      if (els.rangeFrom) els.rangeFrom.value = DateUtils.toInputFormat(DateUtils.toRFC3339(from));
+      if (els.rangeTo) els.rangeTo.value = DateUtils.toInputFormat(DateUtils.toRFC3339(now));
     }
 
     function openPreciseTimeDialog() {
@@ -3789,9 +3765,7 @@
       els.preciseTimeError.textContent = '';
 
       // Получаем текущую позицию из timeline
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const range = getEffectiveRange(params, pending);
+      const range = getCurrentRange();
 
       if (!range.valid) {
         els.preciseTimeError.textContent = 'Диапазон не установлен';
@@ -3829,37 +3803,18 @@
       logUI(`Открыт диалог точной позиции для ${dateStr} ${timeStr}.${millis}`);
     }
 
-    // Converts ISO/RFC3339 string to datetime-local input format (UTC components)
-    function isoToUTCInput(iso) {
-      const d = parseISO(iso);
-      if (!d) return '';
-      const pad = (n) => String(n).padStart(2, '0');
-      return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-    }
-
-    // Converts datetime-local input value to RFC3339 (interpreting input as UTC)
-    function utcInputToISO(val) {
-      if (!val) return '';
-      // Append 'Z' to interpret input as UTC, not local time
-      const d = new Date(val + 'Z');
-      if (Number.isNaN(d.getTime())) return '';
-      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
-    }
-
     function applyPresetMinutes(mins) {
       if (!Number.isFinite(mins) || mins <= 0) return;
       const now = new Date();
       const from = new Date(now.getTime() - mins * 60 * 1000);
-      els.inputs.from.value = toRFC3339(from);
-      els.inputs.to.value = toRFC3339(now);
+      els.inputs.from.value = DateUtils.toRFC3339(from);
+      els.inputs.to.value = DateUtils.toRFC3339(now);
       state.previewTs = null;
       updateRangeLabel();
     }
 
     async function seekOrPreview(ts) {
-      const params = state.model.params || state.model.Params || {};
-      const pending = state.model.pending || state.model.Pending || {};
-      const range = getEffectiveRange(params, pending);
+      const range = getCurrentRange();
       if (!range.valid) return;
       const target = new Date(ts);
       if (Number.isFinite(target.getTime())) {
@@ -3867,10 +3822,6 @@
       }
       logUI(`seekOrPreview request ts=${ts}`);
       await action('seek', '/api/v2/job/seek', { ts, apply: false });
-    }
-
-    function toRFC3339(d) {
-      return d.toISOString().replace(/\.\d{3}Z$/, 'Z');
     }
 
     function setupVerticalResize({ handle, target, storageKey, min = 240, max = 900, onChange }) {
@@ -4080,8 +4031,8 @@
           return;
         }
         if (intoDialog && els.rangeFrom && els.rangeTo) {
-          els.rangeFrom.value = isoToUTCInput(data.from);
-          els.rangeTo.value = isoToUTCInput(data.to);
+          els.rangeFrom.value = DateUtils.toInputFormat(data.from);
+          els.rangeTo.value = DateUtils.toInputFormat(data.to);
         } else {
           els.inputs.from.value = data.from;
           els.inputs.to.value = data.to;

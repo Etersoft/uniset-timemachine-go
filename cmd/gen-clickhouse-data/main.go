@@ -72,7 +72,7 @@ func main() {
 
 	sensors := make([]sensorInfo, 0, len(ids))
 	for _, id := range ids {
-		name, ok := cfg.NameByID(id)
+		name, ok := cfg.NameByHash(id)
 		if !ok || name == "" {
 			log.Fatalf("name not found for sensor %d", id)
 		}

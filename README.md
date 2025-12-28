@@ -2,6 +2,14 @@
 
 Консольный проигрыватель истории датчиков на Go. Читает изменения из PostgreSQL/SQLite/ClickHouse/InfluxDB, интерполирует состояния на шаге и публикует их в SharedMemory либо stdout. Поддерживает HTTP-режим управления v2 (pending range/seek, старт через `/api/v2/job/start`) поверх того же ядра.
 
+![Главный экран TimeMachine](docs/screenshots/01-main-overview.png)
+
+## Документация
+
+- [Руководство по интерфейсу (UI)](docs/UI.md) — описание веб-интерфейса со скриншотами
+- [HTTP API](docs/API.md) — полное описание REST API
+- [Архитектура](docs/Architecture.md) — внутреннее устройство системы
+
 ## Внутренние модули
 - `cmd/timemachine` — CLI и HTTP-режим (`--http-addr`), разбор флагов.
 - `pkg/config` — загрузка XML/JSON UniSet, маппинг имён датчиков и наборов.
@@ -54,7 +62,7 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
 Дополнительные флаги сервера:
 - `--unknown-sensors-mode warn|strict|off` — контроль датчиков, отсутствующих в конфиге, при `/api/v2/job/range` (unknown_count в warn, блокировка в strict, отключение в off).
 
-Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в `DOCS.md`.
+Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в [docs/API.md](docs/API.md).
 Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
 
 Управление защищено сессиями: все управляющие запросы требуют заголовок `X-TM-Session`. `GET /api/v2/session` **не** забирает управление — только возвращает статус (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`, `ping=1` — keepalive). Захват управления только явным `POST /api/v2/session/claim` (успех, если контроллер пуст или просрочен; таймаут — `--control-timeout`, `0` — не отдавать). При чужом токене управляющие вызовы вернут `403 control locked`. UI по умолчанию автоклеймит только при первой загрузке, если контроллера нет; в остальных случаях показывает кнопку «Забрать управление» после таймаута.

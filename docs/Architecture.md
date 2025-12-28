@@ -2,7 +2,7 @@
 
 ## Обзор
 
-TimeMachine — система воспроизведения исторических данных датчиков. Читает изменения из БД (PostgreSQL, SQLite, ClickHouse) и реконструирует состояние датчиков на заданные моменты времени.
+TimeMachine — система воспроизведения исторических данных датчиков. Читает изменения из БД (PostgreSQL, SQLite, ClickHouse, InfluxDB) и реконструирует состояние датчиков на заданные моменты времени.
 
 ### Ключевые принципы
 
@@ -17,7 +17,7 @@ TimeMachine — система воспроизведения историчес
 ```
 CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
                               ↓
-                    (PostgreSQL/SQLite/ClickHouse)
+                    (PostgreSQL/SQLite/ClickHouse/InfluxDB)
                               ↓
                     (Warmup + Window streaming)
                               ↓
@@ -32,7 +32,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 
 ### 1. Загрузчик истории (`internal/storage`)
 
-Интерфейс `Storage` реализован для трёх БД:
+Интерфейс `Storage` реализован для четырёх БД:
 
 #### PostgreSQL (`internal/storage/postgres`)
 - Использует `pgx/pgxpool` для работы с пулом соединений
@@ -48,6 +48,11 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 - Native протокол через `clickhouse-go/v2`
 - Поддержка трёх режимов идентификации: `uniset_hid` (MurmurHash2), `name_hid` (CityHash64), `name` (String)
 - Временные таблицы для фильтрации датчиков
+
+#### InfluxDB (`internal/storage/influxdb`)
+- HTTP API для InfluxDB 1.x
+- Каждый датчик хранится как отдельный measurement
+- Значение в поле `value`
 
 #### Общие методы
 
@@ -193,7 +198,7 @@ timemachine [flags]
 
 | Флаг | Описание |
 |------|----------|
-| `--db` | DSN базы данных (postgres://, sqlite://, clickhouse://) |
+| `--db` | DSN базы данных (postgres://, sqlite://, clickhouse://, influxdb://) |
 | `--confile` | Путь к файлу конфигурации (XML/JSON) |
 | `--slist` | Селектор датчиков |
 | `--from`, `--to` | Границы периода (RFC3339) |

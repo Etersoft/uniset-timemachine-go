@@ -17,7 +17,7 @@
 |---------|----------|
 | **Управление** | Панель воспроизведения: play/pause/stop, seek, скорость, установка диапазона |
 | **Датчики** | Таблица значений всех датчиков с фильтрацией и виртуальным скроллингом (100k+ датчиков) |
-| **Графики** | Визуализация данных в реальном времени (uPlot) |
+| **Графики** | Визуализация данных в реальном времени (Chart.js) |
 
 ### Таблица датчиков
 
@@ -94,7 +94,7 @@ go run ./cmd/timemachine --http-addr 127.0.0.1:9090 --output stdout \
 - `--unknown-sensors-mode warn|strict|off` — контроль датчиков, отсутствующих в конфиге, при `/api/v2/job/range` (unknown_count в warn, блокировка в strict, отключение в off).
 
 Далее управляйте через HTTP v2: `/api/v2/job/sensors` (рабочий список датчиков) → `/api/v2/job/range` (save диапазон) → `/api/v2/job/start` (старт), `pause/resume/stop/seek/step/apply`, `snapshot`, статус `/api/v2/job`, подсчёт датчиков `/api/v2/job/sensors/count`. Словарь датчиков (`id/name/textname/iotype`) доступен по `/api/v2/sensors`. Подробное описание эндпоинтов и примеров запросов см. в [docs/API.md](docs/API.md).
-Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js/uPlot), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
+Встроенный UI доступен по `/ui/`: использует WebSocket `/api/v2/ws/state`, включает кнопки Smoke/Flow для быстрого сценария, индикатор «идёт тестирование…», вкладку «Графики» (Chart.js), подсказки по датчикам и кнопку «Загрузить» для выбора рабочего списка (из файла или списка доступных датчиков).
 
 Управление защищено сессиями: все управляющие запросы требуют заголовок `X-TM-Session`. `GET /api/v2/session` **не** забирает управление — только возвращает статус (`session`, `is_controller`, `controller_present`, `control_timeout_sec`, `can_claim`, `ping=1` — keepalive). Захват управления только явным `POST /api/v2/session/claim` (успех, если контроллер пуст или просрочен; таймаут — `--control-timeout`, `0` — не отдавать). При чужом токене управляющие вызовы вернут `403 control locked`. UI по умолчанию автоклеймит только при первой загрузке, если контроллера нет; в остальных случаях показывает кнопку «Забрать управление» после таймаута.
 
@@ -239,7 +239,7 @@ go run ./cmd/timemachine --db postgres://admin:123@localhost:5432/uniset?sslmode
 make gen-sensors GEN_SENSORS_START=10001 GEN_SENSORS_COUNT=50000
 go run ./cmd/gen-clickhouse-data --db clickhouse://default:@localhost:9000/uniset \
   --table uniset.main_history --confile config/test.xml --selector "Sensor?????_S" \
-  --sensors 50000 --points 300 --step 200ms --random 50 --nodename node1 --producer bench
+  --sensors 50000 --duration 10m --nodename node1 --producer bench
 go run ./cmd/timemachine --db clickhouse://default:@localhost:9000/uniset --ch-table uniset.main_history \
   --confile config/test.xml --slist "Sensor?????_S" --from 2024-06-01T00:00:00Z --to 2024-06-01T00:01:00Z \
   --step 150ms --batch-size 500 --speed 400 --output http://localhost:9191/api/v01/SharedMemory \

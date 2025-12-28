@@ -733,7 +733,10 @@ func restartStream(
 	streamErr *<-chan error,
 	pending *[]storage.SensorEvent,
 ) error {
-	if streamCancel != nil && *streamCancel != nil {
+	if streamCancel == nil {
+		panic("restartStream: streamCancel must not be nil")
+	}
+	if *streamCancel != nil {
 		(*streamCancel)()
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
@@ -746,9 +749,7 @@ func restartStream(
 	})
 	*eventCh, *streamErr = fanInEvents(streamCtx, dataCh, errCh)
 	*pending = make([]storage.SensorEvent, 0, 128)
-	if streamCancel != nil {
-		*streamCancel = cancel
-	}
+	*streamCancel = cancel
 	return nil
 }
 

@@ -16,21 +16,6 @@
 
 ## Быстрый старт
 
-### Docker Compose (рекомендуется)
-
-```bash
-# Запуск всех сервисов
-docker-compose up -d
-
-# Открыть UI
-open http://localhost:9090/ui/
-
-# Остановка
-docker-compose down
-```
-
-### Локальный запуск
-
 ```bash
 # С демо-данными (memstore)
 go run ./cmd/timemachine --http-addr :9090 --output stdout \
@@ -41,9 +26,44 @@ go run ./cmd/timemachine --http-addr :9090 --output stdout \
   --db clickhouse://default:@localhost:9000/uniset \
   --ch-table uniset.main_history \
   --confile config/test.xml --slist ALL
+
+# С конфигурационным файлом
+go run ./cmd/timemachine --config-yaml config/config.yaml
 ```
 
 После запуска откройте http://localhost:9090/ui/
+
+## Конфигурация
+
+Параметры можно задать через YAML-файл (`--config-yaml`). Флаги командной строки имеют приоритет над YAML.
+
+```yaml
+database:
+  dsn: clickhouse://default:@localhost:9000/uniset
+  table: uniset.main_history
+  step: 1s
+  speed: 10
+  window: 1m
+
+http:
+  addr: :9090
+
+sensors:
+  config: config/test.xml
+  selector: ALL
+
+output:
+  mode: stdout                    # или http
+  sm_url: http://localhost:9191/api/v01/SharedMemory
+  sm_supplier: TestProc
+  batch_size: 1024
+```
+
+Сгенерировать пример:
+
+```bash
+go run ./cmd/timemachine --generate-config config/my-config.yaml
+```
 
 ## Веб-интерфейс
 

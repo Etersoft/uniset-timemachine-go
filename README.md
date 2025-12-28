@@ -1,6 +1,9 @@
 # uniset-timemachine-go
 
-Консольный проигрыватель истории датчиков на Go. Читает изменения из PostgreSQL/SQLite/ClickHouse/InfluxDB, интерполирует состояния на шаге и публикует их в SharedMemory либо stdout. Поддерживает HTTP-режим управления v2 (pending range/seek, старт через `/api/v2/job/start`) поверх того же ядра.
+Сервер воспроизведения истории датчиков на Go с веб-интерфейсом. Читает изменения из PostgreSQL/SQLite/ClickHouse/InfluxDB, реконструирует состояние датчиков на заданные моменты времени и публикует их в SharedMemory. Поддерживает два режима работы:
+
+- **HTTP-сервер** — веб-интерфейс с WebSocket-стримингом, REST API управления
+- **CLI** — прямое воспроизведение с выводом в stdout или SharedMemory
 
 ![Главный экран TimeMachine](docs/screenshots/01-main-overview.png)
 

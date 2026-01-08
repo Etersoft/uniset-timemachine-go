@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**uniset-timemachine-go** is a Go-based sensor data replay system that reads historical sensor changes from databases (PostgreSQL, SQLite, ClickHouse) and reconstructs their states at specified time intervals. It operates in two modes:
+**uniset-timemachine-go** is a Go-based sensor data replay system that reads historical sensor changes from databases (PostgreSQL, SQLite, ClickHouse, InfluxDB) and reconstructs their states at specified time intervals. It operates in two modes:
 
 1. **CLI Mode**: Direct playback with output to stdout or SharedMemory HTTP API
 2. **HTTP API Mode**: REST API with WebSocket streaming and interactive web UI for timeline control
@@ -116,7 +116,7 @@ make ch-down    # Stop ClickHouse
 
 # Generate test data
 make gen-sensors GEN_SENSORS_START=10001 GEN_SENSORS_COUNT=50000
-make gen-db GEN_DB_SENSORS=5000 GEN_DB_POINTS=300
+make gen-db GEN_DB_SENSORS=5000 GEN_DB_DURATION=10m
 ```
 
 ### Benchmarking
@@ -149,7 +149,7 @@ make check-sm SM_TEST_SENSOR=10001 SM_TEST_SUPPLIER=TestProc
 ```
 CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
                               ↓
-                    (Postgres/SQLite/ClickHouse)
+                    (Postgres/SQLite/ClickHouse/InfluxDB)
                               ↓
                     (Event streaming with warmup)
                               ↓
@@ -181,6 +181,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
   - `postgres`: Uses pgx connection pool with `make_interval()` microsecond precision
   - `sqlite`: Creates temp table `tm_sensors` to bypass parameter limits
   - `clickhouse`: Native driver with temp filter tables
+  - `influxdb`: HTTP API for InfluxDB 1.x, each sensor as measurement
   - `memstore`: In-memory deterministic test data
 
 **4. Replay Engine (`internal/replay/`)**
@@ -218,7 +219,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 - Real-time sensor table via WebSocket
 - Timeline controls (play/pause/step/seek)
 - Sensor selection and working list management
-- Chart visualization (Chart.js/uPlot)
+- Chart visualization (Chart.js)
 - Smoke/Flow test scenarios
 - Control lock indicator (shows when other session has control)
 
@@ -296,7 +297,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 1. Add handler in `internal/api/http.go`
 2. Update `Manager` in `internal/api/manager.go` if state changes needed
 3. Ensure session validation for control endpoints
-4. Update `DOCS.md` with endpoint documentation
+4. Update `docs/API.md` with endpoint documentation
 5. Add test coverage in `internal/api/http_test.go`
 
 **Modifying Replay Logic**:
@@ -330,7 +331,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 ## Project-Specific Notes
 
 **Russian Documentation**:
-- README.md, DOCS.md, and details.md are written in Russian
+- README.md and docs/*.md are written in Russian
 - Comments in code are primarily in Russian
 - This reflects the project's origin in UniSet ecosystem
 
@@ -340,7 +341,7 @@ CLI/HTTP Server → Config → Storage → Replay Engine → Output Client
 - Sensor configuration follows UniSet XML schema conventions
 
 **Development Philosophy**:
-- Console-focused (no GUI in this branch)
+- Web UI for interactive control, CLI for automation
 - Only event changes stored in DB (not periodic snapshots)
 - Interpolation for gaps between recorded events
 - Robust handling of large sensor counts (100k+) and long time periods
